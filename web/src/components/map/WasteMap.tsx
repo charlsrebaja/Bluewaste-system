@@ -1,0 +1,268 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import "leaflet.heat";
+import {
+  MapReport,
+  WASTE_CATEGORY_LABELS,
+  REPORT_STATUS_LABELS,
+  STATUS_COLORS,
+} from "@/types";
+
+interface WasteMapProps {
+  reports: MapReport[];
+  center?: [number, number];
+  zoom?: number;
+  showHeatmap?: boolean;
+  onReportClick?: (report: MapReport) => void;
+  onMapReady?: (map: L.Map) => void;
+}
+
+export const CATEGORY_COLORS: Record<string, string> = {
+  SOLID_WASTE: "#3b82f6",
+  HAZARDOUS: "#ef4444",
+  LIQUID: "#06b6d4",
+  RECYCLABLE: "#22c55e",
+  ORGANIC: "#84cc16",
+  ELECTRONIC: "#8b5cf6",
+  OTHER: "#6b7280",
+};
+
+const PRIORITY_SIZES: Record<string, number> = {
+  CRITICAL: 22,
+  HIGH: 18,
+  MEDIUM: 15,
+  LOW: 12,
+};
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function createMarkerIcon(category: string, priority: string, status: string) {
+  const color = CATEGORY_COLORS[category] || "#6b7280";
+  const statusColor =
+    (STATUS_COLORS as Record<string, string>)[status] || "#6b7280";
+  const size = PRIORITY_SIZES[priority] || 15;
+  const isPending = status === "PENDING";
+
+  return L.divIcon({
+    html: `<div class="waste-marker${isPending ? " waste-marker--pulse" : ""}" style="--mc:${color};width:${size + 8}px;height:${size + 8}px;background:${color};border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;"><div style="width:${Math.max(4, Math.round(size * 0.38))}px;height:${Math.max(4, Math.round(size * 0.38))}px;background:${statusColor};border-radius:50%;border:1.5px solid rgba(255,255,255,0.8);"></div></div>`,
+    className: "",
+    iconSize: [size + 8, size + 8],
+    iconAnchor: [(size + 8) / 2, (size + 8) / 2],
+  });
+}
+
+export default function WasteMap({
+  reports,
+  center = [7.3132, 125.6844],
+  zoom = 13,
+  showHeatmap = false,
+  onReportClick,
+  onMapReady,
+}: WasteMapProps) {
+  const mapRef = useRef<L.Map | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const markersRef = useRef<L.Marker[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const heatLayerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+
+    const map = L.map(containerRef.current, { zoomControl: false }).setView(
+      center,
+      zoom,
+    );
+
+    // OpenStreetMap — standard colorful basemap
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    // Zoom controls — top right
+    L.control.zoom({ position: "topright" }).addTo(map);
+
+    // Re-center button
+    const RecenterControl = L.Control.extend({
+      options: { position: "topright" },
+      onAdd() {
+        const btn = L.DomUtil.create("button", "leaflet-recenter-btn");
+        btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>`;
+        btn.title = "Recenter on Panabo City";
+        L.DomEvent.on(btn, "click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          map.setView(center, 13, { animate: true });
+        });
+        return btn;
+      },
+    });
+    new RecenterControl().addTo(map);
+
+    mapRef.current = map;
+    onMapReady?.(map);
+
+    // Leaflet picks up container dimensions on init. When loaded via
+    // Next.js dynamic(), the container may measure 0×0 at that instant.
+    // A single rAF + a 200ms fallback guarantees a correct resize.
+    requestAnimationFrame(() => map.invalidateSize());
+    const t = setTimeout(() => map.invalidateSize(), 200);
+
+    return () => {
+      clearTimeout(t);
+      map.remove();
+      mapRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+
+    // Clear old markers
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = [];
+
+    reports.forEach((report) => {
+      const marker = L.marker([report.latitude, report.longitude], {
+        icon: createMarkerIcon(report.category, report.priority, report.status),
+      });
+
+      const catColor = CATEGORY_COLORS[report.category] || "#6b7280";
+      const statusColor =
+        (STATUS_COLORS as Record<string, string>)[report.status] || "#6b7280";
+      const imgHtml = report.images?.[0]
+        ? `<img src="${report.images[0].imageUrl}" style="width:100%;height:80px;object-fit:cover;border-radius:6px;margin-bottom:8px;" loading="lazy" />`
+        : "";
+
+      const popupContent = `
+        <div class="waste-popup">
+          <div class="waste-popup-header" style="background:${catColor};">
+            <span class="waste-popup-cat">${(WASTE_CATEGORY_LABELS as Record<string, string>)[report.category]}</span>
+            <span class="waste-popup-priority">${report.priority}</span>
+          </div>
+          <div class="waste-popup-body">
+            ${imgHtml}
+            <h3 class="waste-popup-title">${report.title.replace(/</g, "&lt;")}</h3>
+            <div class="waste-popup-meta">
+              <span class="waste-popup-status" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}44;">${(REPORT_STATUS_LABELS as Record<string, string>)[report.status]}</span>
+              <span class="waste-popup-time">${timeAgo(report.createdAt)}</span>
+            </div>
+            ${report.barangay ? `<p class="waste-popup-loc">&#128205; Brgy. ${report.barangay.name.replace(/</g, "&lt;")}</p>` : ""}
+            ${report.address ? `<p class="waste-popup-addr">${report.address.replace(/</g, "&lt;")}</p>` : ""}
+          </div>
+        </div>`;
+
+      marker.bindPopup(popupContent, {
+        maxWidth: 240,
+        minWidth: 200,
+        className: "waste-popup-wrapper",
+      });
+
+      // Tooltip on hover — short preview
+      const barangayHtml = report.barangay
+        ? `<span style="display:block;font-size:10px;color:#6b7280;margin-top:3px;">&#128205; Brgy. ${report.barangay.name.replace(/</g, "&lt;")}</span>`
+        : "";
+      const tooltipContent = `
+        <div style="font-size:12px;line-height:1.4;">
+          <strong style="display:block;margin-bottom:3px;color:#1f2937;">${report.title.replace(/</g, "&lt;")}</strong>
+          <span style="font-size:10px;color:#6b7280;">${(WASTE_CATEGORY_LABELS as Record<string, string>)[report.category]}</span>
+          <span style="margin:0 5px;color:#d1d5db;">·</span>
+          <span style="font-size:10px;color:${statusColor};font-weight:600;">${(REPORT_STATUS_LABELS as Record<string, string>)[report.status]}</span>
+          ${barangayHtml}
+        </div>`;
+      marker.bindTooltip(tooltipContent, {
+        direction: "top",
+        offset: [0, -10],
+        opacity: 0.95,
+        className: "waste-marker-tooltip",
+      });
+
+      if (onReportClick) {
+        marker.on("click", () => onReportClick(report));
+      }
+
+      marker.addTo(map);
+      markersRef.current.push(marker);
+    });
+
+    // Auto-fit all visible markers into view
+    if (reports.length > 0) {
+      if (reports.length === 1) {
+        map.setView([reports[0].latitude, reports[0].longitude], 15, {
+          animate: true,
+        });
+      } else {
+        const bounds = L.latLngBounds(
+          reports.map((r) => [r.latitude, r.longitude] as [number, number]),
+        );
+        map.fitBounds(bounds, {
+          padding: [60, 60],
+          maxZoom: 15,
+          animate: true,
+        });
+      }
+    }
+  }, [reports, onReportClick]);
+
+  // ── Heatmap layer ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+
+    // Remove existing heat layer
+    if (heatLayerRef.current) {
+      map.removeLayer(heatLayerRef.current);
+      heatLayerRef.current = null;
+    }
+
+    if (!showHeatmap || reports.length === 0) return;
+
+    const PRIORITY_WEIGHT: Record<string, number> = {
+      CRITICAL: 1.0,
+      HIGH: 0.75,
+      MEDIUM: 0.5,
+      LOW: 0.25,
+    };
+
+    const heatData: [number, number, number][] = reports.map((r) => [
+      r.latitude,
+      r.longitude,
+      PRIORITY_WEIGHT[r.priority] ?? 0.5,
+    ]);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof (L as any).heatLayer === "function") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      heatLayerRef.current = (L as any)
+        .heatLayer(heatData, {
+          radius: 35,
+          blur: 25,
+          maxZoom: 17,
+          max: 1.0,
+          gradient: {
+            0.0: "#3b82f6",
+            0.3: "#06b6d4",
+            0.5: "#22c55e",
+            0.7: "#f59e0b",
+            0.85: "#f97316",
+            1.0: "#ef4444",
+          },
+        })
+        .addTo(map);
+    }
+  }, [reports, showHeatmap]);
+
+  return <div ref={containerRef} className="h-full w-full" />;
+}
