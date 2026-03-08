@@ -40,7 +40,11 @@ export default function DashboardLayout({
       router.push("/login");
     }
     if (!isLoading && user && user.role !== "LGU_ADMIN") {
-      router.push("/citizen/report");
+      if (user.role === "FIELD_WORKER") {
+        router.push("/field-worker");
+      } else {
+        router.push("/citizen/report");
+      }
     }
   }, [user, isLoading, router]);
 

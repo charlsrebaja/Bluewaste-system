@@ -17,5 +17,23 @@ router.get(
   authorize("LGU_ADMIN"),
   UserController.getAllUsers,
 );
+router.post(
+  "/",
+  authenticate,
+  authorize("LGU_ADMIN"),
+  UserController.createUser,
+);
+router.put(
+  "/:id",
+  authenticate,
+  authorize("LGU_ADMIN"),
+  UserController.updateUser,
+);
+router.delete(
+  "/:id",
+  authenticate,
+  authorize("LGU_ADMIN"),
+  UserController.deleteUser,
+);
 
 export default router;

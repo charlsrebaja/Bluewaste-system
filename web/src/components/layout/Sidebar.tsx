@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/providers/AuthProvider";
 import { useSidebar } from "@/contexts/SidebarContext";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,7 @@ import {
   LogOut,
   Menu,
   X,
+  Users,
 } from "lucide-react";
 
 const adminLinks = [
@@ -26,6 +27,7 @@ const adminLinks = [
   { href: "/dashboard/map", label: "Waste Map", icon: Map },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/barangays", label: "Barangays", icon: Building2 },
+  { href: "/dashboard/users", label: "User Management", icon: Users },
   { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -37,6 +39,7 @@ const citizenLinks = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, logout, isAdmin } = useAuth();
   const { isCollapsed, toggleSidebar } = useSidebar();
 
@@ -158,7 +161,10 @@ export function Sidebar() {
             </div>
           )}
           <button
-            onClick={logout}
+            onClick={() => {
+              logout();
+              router.push("/");
+            }}
             className={cn(
               "text-gray-400 hover:text-red-500 transition-colors",
               isCollapsed && "mx-auto",

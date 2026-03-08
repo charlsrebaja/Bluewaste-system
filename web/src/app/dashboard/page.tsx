@@ -22,6 +22,7 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import dynamic from "next/dynamic";
 
 const TrendChart = dynamic(() => import("@/components/analytics/TrendChart"), {
@@ -149,11 +150,10 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg">Recent Reports</CardTitle>
-            <Link
-              href="/dashboard/reports"
-              className="text-sm text-primary hover:underline"
-            >
-              View All
+            <Link href="/dashboard/reports">
+              <Button variant="default" size="sm" className="h-8 px-3">
+                View All
+              </Button>
             </Link>
           </CardHeader>
           <CardContent>
@@ -170,6 +170,11 @@ export default function DashboardPage() {
                     </p>
                     <p className="text-xs text-gray-500">
                       {formatDateTime(report.createdAt)}
+                      {report.barangay?.name && (
+                        <span className="inline-block ml-3 text-xs text-gray-400">
+                          • {report.barangay.name}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <StatusBadge status={report.status} />

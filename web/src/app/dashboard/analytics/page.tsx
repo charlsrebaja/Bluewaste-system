@@ -70,7 +70,11 @@ export default function AnalyticsPage() {
         <h1 className="text-2xl font-bold text-gray-800">
           Analytics & Insights
         </h1>
-        <Button onClick={handleExport} variant="outline">
+        <Button
+          onClick={handleExport}
+          variant="default"
+          className="bg-green-600 hover:bg-green-700 text-white border-green-600"
+        >
           Export CSV
         </Button>
       </div>

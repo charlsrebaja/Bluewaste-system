@@ -4,12 +4,15 @@ import { useAuth } from "@/providers/AuthProvider";
 import { useUnreadCount } from "@/hooks/useNotifications";
 import { Bell, Menu, LogOut } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function Header() {
   const { user, logout, isAdmin } = useAuth();
   const { data: unreadData } = useUnreadCount();
+  const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   const notifPath = isAdmin
     ? "/dashboard/notifications"
@@ -20,6 +23,7 @@ export function Header() {
       <div className="flex items-center justify-between h-16 px-4 md:px-6">
         {/* Mobile menu toggle */}
         <button
+          title="Toggle mobile menu"
           className="md:hidden p-2 rounded-lg hover:bg-gray-100"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
         >
@@ -54,16 +58,46 @@ export function Header() {
             )}
           </Link>
 
-          <div className="hidden md:flex items-center space-x-2">
-            <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-              <span className="text-xs font-semibold text-primary">
-                {user?.firstName?.[0]}
-                {user?.lastName?.[0]}
+          <div className="hidden md:flex items-center space-x-2 relative">
+            <button
+              onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+              className="flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
+                <span className="text-xs font-semibold text-primary">
+                  {user?.firstName?.[0]}
+                  {user?.lastName?.[0]}
+                </span>
+              </div>
+              <span className="text-sm font-medium text-gray-700">
+                {user?.firstName}
               </span>
-            </div>
-            <span className="text-sm font-medium text-gray-700">
-              {user?.firstName}
-            </span>
+            </button>
+
+            {/* Profile Dropdown */}
+            {profileMenuOpen && (
+              <div className="absolute top-full right-0 mt-2 w-48 bg-white border rounded-lg shadow-lg z-50">
+                <div className="px-4 py-3 border-b">
+                  <p className="text-sm font-semibold text-gray-900">
+                    {user?.firstName} {user?.lastName}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {isAdmin ? "Administrator" : "Citizen"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    logout();
+                    router.push("/");
+                  }}
+                  className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <LogOut className="w-4 h-4 mr-2" />
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -124,7 +158,11 @@ export function Header() {
             </>
           )}
           <button
-            onClick={logout}
+            onClick={() => {
+              setMobileMenuOpen(false);
+              logout();
+              router.push("/");
+            }}
             className="flex items-center w-full px-3 py-2 text-sm text-red-600 rounded-lg hover:bg-red-50"
           >
             <LogOut className="w-4 h-4 mr-2" /> Logout

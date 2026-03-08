@@ -58,6 +58,8 @@ export default function LoginPage() {
         const user = JSON.parse(savedUser);
         if (user.role === "LGU_ADMIN") {
           router.push("/dashboard");
+        } else if (user.role === "FIELD_WORKER") {
+          router.push("/field-worker");
         } else {
           router.push("/citizen/report");
         }

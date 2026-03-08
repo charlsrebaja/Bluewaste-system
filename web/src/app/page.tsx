@@ -95,7 +95,6 @@ const features = [
 
 const trustBadges = [
   "Free for all residents",
-  "No app download needed",
   "Real-time updates",
   "Verified cleanups",
 ];
@@ -128,7 +127,11 @@ export default function HomePage() {
           </nav>
           <div className="flex items-center space-x-2">
             <Link href="/login">
-              <Button variant="ghost" size="sm">
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-primary text-dark hover:bg-primary/5"
+              >
                 Login
               </Button>
             </Link>
@@ -175,13 +178,13 @@ export default function HomePage() {
                 <ArrowRight className="w-4 h-4" />
               </Button>
             </Link>
-            <Link href="/login">
+            <Link href="/map">
               <Button
                 size="lg"
                 variant="outline"
                 className="h-12 px-8 text-base font-semibold"
               >
-                Admin Login
+                View Map
               </Button>
             </Link>
           </div>
@@ -190,7 +193,7 @@ export default function HomePage() {
           <div className="mt-12 flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs text-gray-400 font-medium">
             {trustBadges.map((t) => (
               <span key={t} className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                 {t}
               </span>
             ))}
@@ -355,12 +358,15 @@ export default function HomePage() {
             © {new Date().getFullYear()} BlueWaste · Panabo City Smart Waste
             Management Platform
           </p>
-          <div className="flex items-center gap-4 text-sm text-gray-400">
-            <Link
-              href="/login"
-              className="hover:text-gray-700 transition-colors"
-            >
-              Login
+          <div className="flex items-center gap-4 text-sm">
+            <Link href="/login">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-3 text-sm border-primary text-primary"
+              >
+                Login
+              </Button>
             </Link>
             <Link
               href="/register"

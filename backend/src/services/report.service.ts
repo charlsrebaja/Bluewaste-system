@@ -1,5 +1,10 @@
 import prisma from "../config/database";
-import { ReportStatus, WasteCategory, Prisma } from "@prisma/client";
+import {
+  ReportStatus,
+  WasteCategory,
+  Prisma,
+  NotificationType,
+} from "@prisma/client";
 import {
   getPaginationParams,
   buildPaginatedResponse,
@@ -211,6 +216,23 @@ export class ReportService {
         type: "STATUS_CHANGE",
         reportId,
       });
+    }
+
+    // Notify admins when field worker marks report as cleaned
+    if (status === ReportStatus.CLEANED) {
+      const barangayInfo = updatedReport.barangay
+        ? ` in ${updatedReport.barangay.name}`
+        : "";
+      const locationInfo = report.address
+        ? ` (${report.address})`
+        : barangayInfo;
+
+      await NotificationService.notifyAdmins(
+        "Report Completed",
+        `Report "${updatedReport.title}" has been marked as cleaned${locationInfo}. Cleanup completed at ${new Date().toLocaleString("en-PH", { dateStyle: "short", timeStyle: "short" })}.`,
+        reportId,
+        NotificationType.STATUS_CHANGE,
+      );
     }
 
     return updatedReport;

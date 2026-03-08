@@ -1,0 +1,3 @@
+Act as a professional UI/UX Designer and improve the /citizen/report page of the BlueWaste system. Make the layout clean, modern, and user-friendly, with well-organized sections for Report Details, Image Upload, and Location Map.
+
+Ensure the map for selecting location is clear and interactive, form inputs are easy to use, and the submit button is prominent. Also ensure the navbar is sticky at the top when scrolling and the page is fully responsive.

@@ -214,3 +214,19 @@ export function useDeleteReport() {
     },
   });
 }
+
+export function useAssignedReports(
+  filters: { page?: number; status?: ReportStatus } = {},
+) {
+  return useQuery<PaginatedResponse<Report>>({
+    queryKey: ["assigned-reports", filters],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined) params.append(key, String(value));
+      });
+      const { data } = await api.get(`/reports/assigned?${params.toString()}`);
+      return data;
+    },
+  });
+}

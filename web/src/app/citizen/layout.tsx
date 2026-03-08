@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/providers/AuthProvider";
 import Link from "next/link";
+import { Menu, X, LogOut } from "lucide-react";
 
 const citizenLinks = [
   { href: "/citizen/report", label: "Submit Report", icon: "📝" },
@@ -19,6 +20,7 @@ export default function CitizenLayout({
   const { user, isLoading, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -39,15 +41,20 @@ export default function CitizenLayout({
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Nav */}
-      <header className="border-b bg-white shadow-sm">
+      <header className="sticky top-0 z-50 border-b bg-white shadow-sm">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-          <Link
-            href="/citizen/report"
-            className="text-xl font-bold text-blue-600"
-          >
-            BlueWaste
+          {/* Logo */}
+          <Link href="/citizen/report" className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+              <span className="text-white font-bold text-sm">BW</span>
+            </div>
+            <span className="hidden sm:inline text-xl font-bold text-primary">
+              BlueWaste
+            </span>
           </Link>
-          <nav className="flex items-center gap-1">
+
+          {/* Desktop Navigation */}
+          <nav className="hidden md:flex items-center gap-1">
             {citizenLinks.map((link) => (
               <Link
                 key={link.href}
@@ -63,19 +70,71 @@ export default function CitizenLayout({
               </Link>
             ))}
           </nav>
-          <div className="flex items-center gap-3">
+
+          {/* Desktop User Info */}
+          <div className="hidden md:flex items-center gap-3">
             <span className="text-sm text-gray-600">{user.firstName}</span>
             <button
               onClick={() => {
                 logout();
                 router.push("/");
               }}
-              className="text-sm text-red-500 hover:text-red-700"
+              className="text-sm font-medium bg-red-500 text-white px-3 py-1.5 rounded-lg hover:bg-red-600 transition-colors"
             >
               Logout
             </button>
           </div>
+
+          {/* Mobile: User name + Menu button */}
+          <div className="md:hidden flex items-center gap-2">
+            <span className="text-xs text-gray-600">{user.firstName}</span>
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              title="Toggle menu"
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              {mobileMenuOpen ? (
+                <X className="w-5 h-5 text-gray-600" />
+              ) : (
+                <Menu className="w-5 h-5 text-gray-600" />
+              )}
+            </button>
+          </div>
         </div>
+
+        {/* Mobile Menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t bg-white">
+            <nav className="mx-auto max-w-5xl px-4 py-3 space-y-1">
+              {citizenLinks.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    pathname === link.href
+                      ? "bg-blue-50 text-blue-700"
+                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-800"
+                  }`}
+                >
+                  <span>{link.icon}</span>
+                  {link.label}
+                </Link>
+              ))}
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  logout();
+                  router.push("/");
+                }}
+                className="flex items-center gap-2 w-full rounded-lg px-3 py-2.5 text-sm font-medium bg-red-500 text-white hover:bg-red-600 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
+            </nav>
+          </div>
+        )}
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>

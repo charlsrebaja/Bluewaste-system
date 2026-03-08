@@ -24,7 +24,12 @@ export class NotificationService {
     });
   }
 
-  static async notifyAdmins(title: string, message: string, reportId?: string) {
+  static async notifyAdmins(
+    title: string,
+    message: string,
+    reportId?: string,
+    type: NotificationType = NotificationType.NEW_REPORT,
+  ) {
     const admins = await prisma.user.findMany({
       where: { role: Role.LGU_ADMIN, isActive: true },
       select: { id: true },
@@ -34,7 +39,7 @@ export class NotificationService {
       userId: admin.id,
       title,
       message,
-      type: NotificationType.NEW_REPORT,
+      type,
       reportId,
     }));
 

@@ -118,9 +118,9 @@ ios/
 * Activity logs
 * Waste analytics charts
 
-# 3. LGU Staff / Field Workers (Mobile)
+# 3. LGU Staff / Field Workers (Web,Mobile)
 
-* Mobile app for field workers
+* Web and Mobile app for field workers
 * Verify reports on site
 * View assigned cleanup tasks
 * Mark reports as completed or in progress
