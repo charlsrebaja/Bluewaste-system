@@ -67,13 +67,16 @@ app.use("/api/upload", uploadRoutes);
 // Error handler
 app.use(errorHandler);
 
-// Start server
+// Start server (only in development, not in serverless)
 const PORT = parseInt(env.PORT, 10);
 
-app.listen(PORT, () => {
-  console.log(`🚀 BlueWaste API running on http://localhost:${PORT}`);
-  console.log(`📊 Environment: ${env.NODE_ENV}`);
-  console.log(`🗄️  Database connected`);
-});
+if (env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log(`🚀 BlueWaste API running on http://localhost:${PORT}`);
+    console.log(`📊 Environment: ${env.NODE_ENV}`);
+    console.log(`🗄️  Database connected`);
+  });
+}
 
 export default app;
+export { app };
