@@ -1,18 +1,10 @@
 {
-  "buildCommand": "cd backend && npm install && npm run build && cd ../web && npm install && npm run build",
+  "buildCommand": "npm install --include=dev && npm run backend:build && npm run web:build",
   "outputDirectory": "web/.next",
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api/:path*"
+      "destination": "/api/index"
     }
-  ],
-  "env": {
-    "DATABASE_URL": "@database_url",
-    "JWT_SECRET": "@jwt_secret",
-    "CLOUDINARY_CLOUD_NAME": "@cloudinary_cloud_name",
-    "CLOUDINARY_API_KEY": "@cloudinary_api_key",
-    "CLOUDINARY_API_SECRET": "@cloudinary_api_secret",
-    "NODE_ENV": "production"
-  }
+  ]
 }

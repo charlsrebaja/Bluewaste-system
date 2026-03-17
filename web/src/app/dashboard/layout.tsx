@@ -1,18 +1,18 @@
 "use client";
 
+import { ReactNode, useEffect } from "react";
 import { useAuth } from "@/providers/AuthProvider";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { SidebarProvider, useSidebar } from "@/contexts/SidebarContext";
 import { cn } from "@/lib/utils";
 
-function DashboardContent({ children }: { children: React.ReactNode }) {
+function DashboardContent({ children }: { children: ReactNode }) {
   const { isCollapsed } = useSidebar();
 
   return (
-    <>
+    <div className="min-h-screen bg-gray-50">
       <Sidebar />
       <div
         className={cn(
@@ -23,15 +23,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
         <Header />
         <main className="p-4 md:p-6">{children}</main>
       </div>
-    </>
+    </div>
   );
 }
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
   const router = useRouter();
 
@@ -56,13 +52,13 @@ export default function DashboardLayout({
     );
   }
 
-  if (!user || user.role !== "LGU_ADMIN") return null;
+  if (!user || user.role !== "LGU_ADMIN") {
+    return null;
+  }
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen bg-gray-50">
-        <DashboardContent>{children}</DashboardContent>
-      </div>
+      <DashboardContent>{children}</DashboardContent>
     </SidebarProvider>
   );
 }

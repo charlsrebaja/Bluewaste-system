@@ -9,7 +9,7 @@ import {
   assignWorkerSchema,
   reportFilterSchema,
 } from "../validators/report.validator";
-import { upload } from "../middleware/upload";
+import { upload, validateUploadedImages } from "../middleware/upload";
 
 const router = Router();
 
@@ -67,6 +67,7 @@ router.post(
   "/:id/images",
   authenticate,
   upload.array("images", 5),
+  validateUploadedImages,
   ReportController.addImages,
 );
 

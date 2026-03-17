@@ -131,7 +131,7 @@ export class ReportService {
   }
 
   static async findById(id: string) {
-    const report = await prisma.report.findUnique({
+    const report = await prisma.report.findFirst({
       where: { id, isDeleted: false },
       include: {
         reporter: {
@@ -178,7 +178,7 @@ export class ReportService {
     changedById: string,
     notes?: string,
   ) {
-    const report = await prisma.report.findUnique({
+    const report = await prisma.report.findFirst({
       where: { id: reportId, isDeleted: false },
     });
 
@@ -243,7 +243,7 @@ export class ReportService {
     assignedToId: string,
     assignedById: string,
   ) {
-    const report = await prisma.report.findUnique({
+    const report = await prisma.report.findFirst({
       where: { id: reportId, isDeleted: false },
     });
 

@@ -101,6 +101,34 @@
   );
 }
 
+/* Hero section: ambient glows */
+.hero-glow-one {
+  background: radial-gradient(
+    circle,
+    rgba(59, 130, 246, 0.22) 0%,
+    rgba(59, 130, 246, 0.08) 38%,
+    transparent 72%
+  );
+}
+
+.hero-glow-two {
+  background: radial-gradient(
+    circle,
+    rgba(14, 165, 233, 0.2) 0%,
+    rgba(125, 211, 252, 0.1) 42%,
+    transparent 75%
+  );
+}
+
+/* Hero section: subtle paper-like noise texture */
+.hero-noise {
+  background-image: radial-gradient(
+    rgba(30, 41, 59, 0.08) 0.6px,
+    transparent 0.6px
+  );
+  background-size: 8px 8px;
+}
+
 /* Leaflet overrides */
 .leaflet-container {
   width: 100%;

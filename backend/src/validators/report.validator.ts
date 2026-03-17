@@ -62,9 +62,18 @@ export const reportFilterSchema = z.object({
     ])
     .optional(),
   barangayId: z.string().uuid().optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid startDate")
+    .optional(),
+  endDate: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid endDate")
+    .optional(),
   search: z.string().max(100).optional(),
-  page: z.string().optional(),
-  limit: z.string().optional(),
+  page: z.string().regex(/^\d+$/, "page must be a positive integer").optional(),
+  limit: z
+    .string()
+    .regex(/^\d+$/, "limit must be a positive integer")
+    .optional(),
 });

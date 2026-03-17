@@ -22,6 +22,9 @@ import uploadRoutes from "./routes/upload.routes";
 
 const app = express();
 
+// Ensure correct client IP detection behind reverse proxies/load balancers.
+app.set("trust proxy", 1);
+
 // Security middleware
 app.use(helmet());
 app.use(
@@ -78,5 +81,4 @@ if (env.NODE_ENV !== "production") {
   });
 }
 
-export default app;
 export { app };

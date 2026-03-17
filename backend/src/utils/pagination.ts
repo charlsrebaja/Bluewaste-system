@@ -17,8 +17,14 @@ export const getPaginationParams = (query: {
   page?: string;
   limit?: string;
 }): PaginationParams => {
-  const page = Math.max(1, parseInt(query.page || "1", 10));
-  const limit = Math.min(100, Math.max(1, parseInt(query.limit || "20", 10)));
+  const parsedPage = Number.parseInt(query.page ?? "1", 10);
+  const parsedLimit = Number.parseInt(query.limit ?? "20", 10);
+
+  const page = Number.isNaN(parsedPage) ? 1 : Math.max(1, parsedPage);
+  const limit = Number.isNaN(parsedLimit)
+    ? 20
+    : Math.min(100, Math.max(1, parsedLimit));
+
   return { page, limit };
 };
 

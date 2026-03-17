@@ -1,8 +1,3 @@
-import { VercelRequest, VercelResponse } from "@vercel/node";
-import "../backend/src/index";
+import { app } from "../backend/src/index";
 
-export default async (req: VercelRequest, res: VercelResponse) => {
-  // Import and initialize your Express app
-  const { app } = require("../backend/src/index");
-  return app(req, res);
-};
+export default app;
