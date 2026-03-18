@@ -148,24 +148,34 @@ export default function HomePage() {
               </Link>
             </div>
 
-            <button
-              type="button"
-              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
-              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
-              aria-expanded={mobileMenuOpen}
-              aria-controls="mobile-nav"
-              onClick={() => setMobileMenuOpen((prev) => !prev)}
-            >
-              {mobileMenuOpen ? (
+            {mobileMenuOpen ? (
+              <button
+                type="button"
+                className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+                aria-label="Close menu"
+                aria-expanded="true"
+                aria-controls="mobile-nav"
+                onClick={() => setMobileMenuOpen(false)}
+              >
                 <X className="w-5 h-5" />
-              ) : (
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+                aria-label="Open menu"
+                aria-expanded="false"
+                aria-controls="mobile-nav"
+                onClick={() => setMobileMenuOpen(true)}
+              >
                 <Menu className="w-5 h-5" />
-              )}
-            </button>
+              </button>
+            )}
           </div>
 
           <div
             id="mobile-nav"
+            hidden={!mobileMenuOpen}
             className={`md:hidden overflow-hidden transition-all duration-300 ease-out ${
               mobileMenuOpen
                 ? "max-h-72 opacity-100 pb-4"

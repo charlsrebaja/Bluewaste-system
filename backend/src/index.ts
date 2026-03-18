@@ -22,22 +22,47 @@ import uploadRoutes from "./routes/upload.routes";
 
 const app = express();
 
+const allowedOrigins = new Set([
+  env.WEB_URL,
+  env.MOBILE_URL,
+  "http://localhost:3000",
+  "http://localhost:8081",
+]);
+
+const corsOptions: cors.CorsOptions = {
+  origin(origin, callback) {
+    // Allow non-browser requests (curl, health checks, server-to-server calls).
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowedOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    try {
+      const { hostname } = new URL(origin);
+      if (hostname.endsWith(".vercel.app")) {
+        callback(null, true);
+        return;
+      }
+    } catch {
+      // Invalid origin format falls through to rejection below.
+    }
+
+    callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+};
+
 // Ensure correct client IP detection behind reverse proxies/load balancers.
 app.set("trust proxy", 1);
 
 // Security middleware
 app.use(helmet());
-app.use(
-  cors({
-    origin: [
-      env.WEB_URL,
-      env.MOBILE_URL,
-      "http://localhost:3000",
-      "http://localhost:8081",
-    ],
-    credentials: true,
-  }),
-);
+app.use(cors(corsOptions));
 
 // Body parsing
 app.use(express.json({ limit: "10mb" }));
