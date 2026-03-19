@@ -53,6 +53,12 @@ enum NotificationType {
   SYSTEM
 }
 
+enum AiWasteType {
+  RECYCLABLE
+  NON_RECYCLABLE
+  ORGANIC
+}
+
 // ==================== MODELS ====================
 
 model User {
@@ -81,6 +87,8 @@ model User {
   notifications   Notification[]
   // Activity logs
   activityLogs    ActivityLog[]
+  // AI-assisted waste detections
+  wasteReports    WasteReport[]
 
   @@index([role])
   @@index([email])
@@ -203,4 +211,25 @@ model ActivityLog {
   @@index([userId])
   @@index([entityType, entityId])
   @@index([createdAt])
+}
+
+model WasteReport {
+  id             String      @id @default(uuid())
+  imageUrl       String
+  detectedObject String
+  wasteType      AiWasteType
+  confidence     Float
+  latitude       Float?
+  longitude      Float?
+  address        String?
+  labels         String[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  reporterId String?
+  reporter   User?   @relation(fields: [reporterId], references: [id], onDelete: SetNull)
+
+  @@index([wasteType])
+  @@index([createdAt])
+  @@index([reporterId])
 }

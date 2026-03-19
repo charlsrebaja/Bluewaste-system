@@ -76,6 +76,7 @@ export default function SubmitReportPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const createReport = useCreateReport();
   const uploadImages = useUploadReportImages();
@@ -111,12 +112,20 @@ export default function SubmitReportPage() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) addFiles(e.target.files);
+    // Reset input so selecting the same photo again still triggers onChange.
+    e.target.value = "";
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
+  };
+
+  const openCameraPicker = () => {
+    if (!cameraInputRef.current) return;
+    cameraInputRef.current.setAttribute("capture", "environment");
+    cameraInputRef.current.click();
   };
 
   const removeFile = (index: number) => {
@@ -512,9 +521,32 @@ export default function SubmitReportPage() {
                         Drag & drop photos here
                       </p>
                       <p className="text-xs text-gray-400 mt-1">
-                        or click to browse — JPG, PNG, WEBP supported
+                        or use camera/browse — JPG, PNG, WEBP supported
                       </p>
                     </div>
+                  </div>
+                )}
+
+                {files.length < 5 && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={openCameraPicker}
+                      className="gap-2"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Take Photo
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Browse Files
+                    </Button>
                   </div>
                 )}
 
@@ -524,6 +556,15 @@ export default function SubmitReportPage() {
                   accept="image/*"
                   multiple
                   title="Upload report photos"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  title="Take report photo"
                   className="hidden"
                   onChange={handleFileChange}
                 />

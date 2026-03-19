@@ -2,10 +2,6 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import dotenv from "dotenv";
-
-// Load environment variables
-dotenv.config({ path: "../.env" });
 
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
@@ -19,6 +15,7 @@ import barangayRoutes from "./routes/barangay.routes";
 import notificationRoutes from "./routes/notification.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import uploadRoutes from "./routes/upload.routes";
+import wasteReportRoutes from "./routes/wasteReport.routes";
 
 const app = express();
 
@@ -91,6 +88,7 @@ app.use("/api/barangays", barangayRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/waste-reports", wasteReportRoutes);
 
 // Error handler
 app.use(errorHandler);

@@ -48,6 +48,22 @@ export interface Report {
   updatedAt: string;
 }
 
+export type AiWasteType = "RECYCLABLE" | "NON_RECYCLABLE" | "ORGANIC";
+
+export interface WasteReport {
+  id: string;
+  imageUrl: string;
+  detectedObject: string;
+  wasteType: AiWasteType;
+  confidence: number;
+  labels: string[];
+  latitude?: number | null;
+  longitude?: number | null;
+  address?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReportImage {
   id: string;
   imageUrl: string;
