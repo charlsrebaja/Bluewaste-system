@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { Barangay, WASTE_CATEGORY_LABELS, WasteCategory } from "@/types";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/providers/AuthProvider";
 import {
   FileText,
   MapPin,
@@ -26,6 +27,7 @@ import {
   X,
   Loader2,
   Info,
+  Sparkles,
 } from "lucide-react";
 
 const LocationPickerMap = dynamic(
@@ -63,8 +65,25 @@ const CATEGORY_COLORS: Record<string, string> = {
   OTHER: "bg-slate-100 text-slate-700",
 };
 
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
+
+type AnalyzeWasteResult = {
+  detectedObject: string;
+  wasteType: "Recyclable" | "Non-recyclable" | "Organic";
+  confidence: number;
+  labels: string[];
+};
+
+const ANALYSIS_TYPE_STYLES: Record<AnalyzeWasteResult["wasteType"], string> = {
+  Recyclable: "bg-green-100 text-green-700 border-green-200",
+  Organic: "bg-amber-100 text-amber-700 border-amber-200",
+  "Non-recyclable": "bg-red-100 text-red-700 border-red-200",
+};
+
 export default function SubmitReportPage() {
   const router = useRouter();
+  const { token } = useAuth();
   const [step, setStep] = useState(1);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
     null,
@@ -73,6 +92,11 @@ export default function SubmitReportPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
   const [submitError, setSubmitError] = useState("");
+  const [photoError, setPhotoError] = useState("");
+  const [analysisError, setAnalysisError] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] =
+    useState<AnalyzeWasteResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -100,7 +124,39 @@ export default function SubmitReportPage() {
   });
 
   const addFiles = (incoming: FileList | File[]) => {
-    const newFiles = Array.from(incoming).slice(0, 5 - files.length);
+    const incomingFiles = Array.from(incoming);
+    const availableSlots = 5 - files.length;
+
+    if (availableSlots <= 0) {
+      setPhotoError("You can only upload up to 5 photos.");
+      return;
+    }
+
+    const validFiles: File[] = [];
+    for (const file of incomingFiles) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        setPhotoError("Only JPG, PNG, and WEBP images are allowed.");
+        continue;
+      }
+
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        setPhotoError("Each image must be 8MB or smaller.");
+        continue;
+      }
+
+      validFiles.push(file);
+      if (validFiles.length >= availableSlots) break;
+    }
+
+    if (validFiles.length === 0) {
+      return;
+    }
+
+    setPhotoError("");
+    setAnalysisError("");
+    setAnalysisResult(null);
+
+    const newFiles = validFiles;
     setFiles((prev) => [...prev, ...newFiles]);
     newFiles.forEach((f) => {
       const reader = new FileReader();
@@ -131,6 +187,65 @@ export default function SubmitReportPage() {
   const removeFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
     setPreviews((prev) => prev.filter((_, i) => i !== index));
+    setAnalysisError("");
+    setAnalysisResult(null);
+  };
+
+  const handleAnalyzeWaste = async () => {
+    if (files.length === 0) {
+      setAnalysisError("Add at least one photo before analyzing.");
+      return;
+    }
+
+    if (!token) {
+      setAnalysisError("Please log in again to analyze images.");
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("image", files[0]);
+
+      if (location) {
+        formData.append("latitude", String(location.lat));
+        formData.append("longitude", String(location.lng));
+      }
+
+      const address = watch("address");
+      if (typeof address === "string" && address.trim().length > 0) {
+        formData.append("address", address.trim());
+      }
+
+      const response = await fetch("/api/analyze-waste", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to analyze waste image.");
+      }
+
+      setAnalysisResult({
+        detectedObject: payload.detectedObject,
+        wasteType: payload.wasteType,
+        confidence: payload.confidence,
+        labels: Array.isArray(payload.labels) ? payload.labels : [],
+      });
+    } catch (err) {
+      setAnalysisResult(null);
+      setAnalysisError(
+        err instanceof Error ? err.message : "Failed to analyze waste image.",
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const onSubmit = async (data: ReportFormData) => {
@@ -497,6 +612,11 @@ export default function SubmitReportPage() {
                   team better assess the situation.
                 </p>
 
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm text-blue-700">
+                  AI analysis will use the first attached photo to detect likely
+                  waste type.
+                </div>
+
                 {/* Drop Zone */}
                 {files.length < 5 && (
                   <div
@@ -568,6 +688,77 @@ export default function SubmitReportPage() {
                   className="hidden"
                   onChange={handleFileChange}
                 />
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleAnalyzeWaste}
+                    disabled={isAnalyzing || files.length === 0}
+                    className="gap-2"
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />{" "}
+                        Analyzing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" /> Analyze Waste
+                      </>
+                    )}
+                  </Button>
+                  <span className="text-xs text-gray-500">
+                    Uses Google Cloud Vision labels
+                  </span>
+                </div>
+
+                {photoError && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {photoError}
+                  </div>
+                )}
+
+                {analysisError && (
+                  <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {analysisError}
+                  </div>
+                )}
+
+                {analysisResult && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                    <p className="text-xs uppercase tracking-wide font-semibold text-emerald-700">
+                      AI Detection Result
+                    </p>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm text-gray-700">
+                      <span className="font-medium text-gray-600">Object</span>
+                      <span className="capitalize">
+                        {analysisResult.detectedObject}
+                      </span>
+                      <span className="font-medium text-gray-600">Type</span>
+                      <span>
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${ANALYSIS_TYPE_STYLES[analysisResult.wasteType]}`}
+                        >
+                          {analysisResult.wasteType}
+                        </span>
+                      </span>
+                      <span className="font-medium text-gray-600">
+                        Confidence
+                      </span>
+                      <span>
+                        {(analysisResult.confidence * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    {analysisResult.labels.length > 0 && (
+                      <p className="text-xs text-gray-500">
+                        Labels: {analysisResult.labels.slice(0, 6).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Preview Grid */}
                 {previews.length > 0 && (
