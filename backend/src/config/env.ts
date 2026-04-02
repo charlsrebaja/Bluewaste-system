@@ -15,6 +15,7 @@ const envSchema = z.object({
     .default("development"),
   WEB_URL: z.string().default("http://localhost:3000"),
   MOBILE_URL: z.string().default("http://localhost:8081"),
+  ALLOWED_ORIGINS: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

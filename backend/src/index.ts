@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import compression from "compression";
 
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
@@ -19,11 +20,17 @@ import wasteReportRoutes from "./routes/wasteReport.routes";
 
 const app = express();
 
+const additionalOrigins = (env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const allowedOrigins = new Set([
   env.WEB_URL,
   env.MOBILE_URL,
   "http://localhost:3000",
   "http://localhost:8081",
+  ...additionalOrigins,
 ]);
 
 const corsOptions: cors.CorsOptions = {
@@ -39,16 +46,6 @@ const corsOptions: cors.CorsOptions = {
       return;
     }
 
-    try {
-      const { hostname } = new URL(origin);
-      if (hostname.endsWith(".vercel.app")) {
-        callback(null, true);
-        return;
-      }
-    } catch {
-      // Invalid origin format falls through to rejection below.
-    }
-
     callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
@@ -60,6 +57,7 @@ app.set("trust proxy", 1);
 // Security middleware
 app.use(helmet());
 app.use(cors(corsOptions));
+app.use(compression());
 
 // Body parsing
 app.use(express.json({ limit: "10mb" }));

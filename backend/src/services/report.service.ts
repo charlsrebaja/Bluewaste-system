@@ -13,6 +13,69 @@ import {
 import { NotificationService } from "./notification.service";
 
 export class ReportService {
+  private static readonly GEO_CACHE_TTL_MS = 20_000;
+
+  private static mapDataCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      data: any[];
+    }
+  >();
+
+  private static heatmapCache: {
+    expiresAt: number;
+    data: Array<{ lat: number; lng: number; intensity: number }>;
+  } | null = null;
+
+  private static invalidateGeoCaches() {
+    this.mapDataCache.clear();
+    this.heatmapCache = null;
+  }
+
+  private static getCachedMapData(cacheKey: string) {
+    const cached = this.mapDataCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+
+    if (cached.expiresAt < Date.now()) {
+      this.mapDataCache.delete(cacheKey);
+      return null;
+    }
+
+    return cached.data;
+  }
+
+  private static setCachedMapData(cacheKey: string, data: any[]) {
+    this.mapDataCache.set(cacheKey, {
+      expiresAt: Date.now() + this.GEO_CACHE_TTL_MS,
+      data,
+    });
+  }
+
+  private static getCachedHeatmapData() {
+    if (!this.heatmapCache) {
+      return null;
+    }
+
+    if (this.heatmapCache.expiresAt < Date.now()) {
+      this.heatmapCache = null;
+      return null;
+    }
+
+    return this.heatmapCache.data;
+  }
+
+  private static setCachedHeatmapData(
+    data: Array<{ lat: number; lng: number; intensity: number }>,
+  ) {
+    this.heatmapCache = {
+      expiresAt: Date.now() + this.GEO_CACHE_TTL_MS,
+      data,
+    };
+  }
+
   static async create(data: {
     title: string;
     description: string;
@@ -25,46 +88,54 @@ export class ReportService {
     priority?: string;
     reporterId?: string;
   }) {
-    const report = await prisma.report.create({
-      data: {
-        title: data.title,
-        description: data.description,
-        category: data.category,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        address: data.address,
-        barangayId: data.barangayId,
-        isAnonymous: data.isAnonymous || false,
-        priority: (data.priority as any) || "MEDIUM",
-        reporterId: data.isAnonymous ? null : data.reporterId,
-      },
-      include: {
-        reporter: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-        barangay: { select: { id: true, name: true } },
-        images: true,
-      },
-    });
-
-    // Create initial status history
-    if (data.reporterId) {
-      await prisma.statusHistory.create({
+    const report = await prisma.$transaction(async (tx) => {
+      const created = await tx.report.create({
         data: {
-          reportId: report.id,
-          newStatus: ReportStatus.PENDING,
-          changedById: data.reporterId,
-          notes: "Report submitted",
+          title: data.title,
+          description: data.description,
+          category: data.category,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          address: data.address,
+          barangayId: data.barangayId,
+          isAnonymous: data.isAnonymous || false,
+          priority: (data.priority as any) || "MEDIUM",
+          reporterId: data.isAnonymous ? null : data.reporterId,
+        },
+        include: {
+          reporter: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          barangay: { select: { id: true, name: true } },
+          images: true,
         },
       });
+
+      if (data.reporterId) {
+        await tx.statusHistory.create({
+          data: {
+            reportId: created.id,
+            newStatus: ReportStatus.PENDING,
+            changedById: data.reporterId,
+            notes: "Report submitted",
+          },
+        });
+      }
+
+      return created;
+    });
+
+    try {
+      await NotificationService.notifyAdmins(
+        "New Waste Report",
+        `A new ${data.category.replace("_", " ").toLowerCase()} report has been submitted: "${data.title}"`,
+        report.id,
+      );
+    } catch (error) {
+      console.warn("Failed to notify admins for new report:", report.id, error);
     }
 
-    // Notify LGU admins
-    await NotificationService.notifyAdmins(
-      "New Waste Report",
-      `A new ${data.category.replace("_", " ").toLowerCase()} report has been submitted: "${data.title}"`,
-      report.id,
-    );
+    this.invalidateGeoCaches();
 
     return report;
   }
@@ -235,6 +306,8 @@ export class ReportService {
       );
     }
 
+    this.invalidateGeoCaches();
+
     return updatedReport;
   }
 
@@ -352,13 +425,31 @@ export class ReportService {
     status?: ReportStatus;
     category?: WasteCategory;
     barangayId?: string;
+    limit?: string;
   }) {
+    const parsedLimit = Number.parseInt(filters?.limit || "", 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 5000)
+      : 2000;
+
+    const cacheKey = JSON.stringify({
+      status: filters?.status || null,
+      category: filters?.category || null,
+      barangayId: filters?.barangayId || null,
+      limit,
+    });
+
+    const cached = this.getCachedMapData(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const where: Prisma.ReportWhereInput = { isDeleted: false };
     if (filters?.status) where.status = filters.status;
     if (filters?.category) where.category = filters.category;
     if (filters?.barangayId) where.barangayId = filters.barangayId;
 
-    return prisma.report.findMany({
+    const reports = await prisma.report.findMany({
       where,
       select: {
         id: true,
@@ -374,10 +465,25 @@ export class ReportService {
         images: { take: 1, select: { imageUrl: true } },
       },
       orderBy: { createdAt: "desc" },
+      take: limit,
     });
+
+    this.setCachedMapData(cacheKey, reports);
+
+    return reports;
   }
 
-  static async getHeatmapData() {
+  static async getHeatmapData(filters?: { limit?: string }) {
+    const cached = this.getCachedHeatmapData();
+    if (cached) {
+      return cached;
+    }
+
+    const parsedLimit = Number.parseInt(filters?.limit || "", 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 10000)
+      : 5000;
+
     const reports = await prisma.report.findMany({
       where: { isDeleted: false, status: { not: ReportStatus.CLEANED } },
       select: {
@@ -385,9 +491,11 @@ export class ReportService {
         longitude: true,
         priority: true,
       },
+      orderBy: { createdAt: "desc" },
+      take: limit,
     });
 
-    return reports.map((r) => ({
+    const heatmapData = reports.map((r) => ({
       lat: r.latitude,
       lng: r.longitude,
       intensity:
@@ -399,15 +507,23 @@ export class ReportService {
               ? 0.5
               : 0.25,
     }));
+
+    this.setCachedHeatmapData(heatmapData);
+
+    return heatmapData;
   }
 
   static async softDelete(reportId: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } });
     if (!report) throw new Error("Report not found");
 
-    return prisma.report.update({
+    const deletedReport = await prisma.report.update({
       where: { id: reportId },
       data: { isDeleted: true },
     });
+
+    this.invalidateGeoCaches();
+
+    return deletedReport;
   }
 }

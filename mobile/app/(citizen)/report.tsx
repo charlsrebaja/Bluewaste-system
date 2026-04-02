@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import api from "../../lib/api";
+import { getApiErrorMessage } from "../../lib/apiError";
 import { WASTE_CATEGORY_LABELS, WasteCategory } from "../../types";
 
 const categories = Object.entries(WASTE_CATEGORY_LABELS) as [
@@ -117,10 +118,18 @@ export default function ReportScreen() {
         { text: "OK", onPress: () => router.push("/(citizen)/my-reports") },
       ]);
     } catch (err: any) {
-      Alert.alert(
-        "Error",
-        err?.response?.data?.message || "Failed to submit report",
-      );
+      if (err?.response?.status === 401) {
+        Alert.alert(
+          "Login Required",
+          "Your session has expired. Please sign in again to submit reports.",
+          [{ text: "OK", onPress: () => router.replace("/(auth)/login") }],
+        );
+      } else {
+        Alert.alert(
+          "Error",
+          getApiErrorMessage(err, "Failed to submit report"),
+        );
+      }
     } finally {
       setLoading(false);
     }

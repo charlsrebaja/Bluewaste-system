@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/providers/AuthProvider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { DetectionBox } from "@/lib/waste-classification";
+import DetectionImageOverlay from "@/components/ai/DetectionImageOverlay";
+import { getApiErrorMessage } from "@/lib/apiError";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -22,6 +25,7 @@ interface AnalyzeWasteResult {
   confidence: number;
   imageUrl: string;
   labels: string[];
+  detections: DetectionBox[];
 }
 
 const CATEGORY_STYLES: Record<AnalyzeWasteResult["wasteType"], string> = {
@@ -155,13 +159,14 @@ export default function ReportWastePage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to analyze image");
+        throw new Error(
+          data.message || data.error || "Failed to analyze image",
+        );
       }
 
       setResult(data as AnalyzeWasteResult);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to analyze image";
+      const message = getApiErrorMessage(err, "Failed to analyze image");
       setError(message);
     } finally {
       setIsAnalyzing(false);
@@ -253,14 +258,12 @@ export default function ReportWastePage() {
             </div>
 
             {previewUrl && (
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={previewUrl}
-                  alt="Waste preview"
-                  className="h-72 w-full object-cover"
-                />
-              </div>
+              <DetectionImageOverlay
+                imageSrc={previewUrl}
+                alt="Waste preview"
+                detections={result?.detections || []}
+                imageClassName="w-full h-auto max-h-[28rem] object-contain bg-white"
+              />
             )}
 
             {error && (
@@ -297,11 +300,11 @@ export default function ReportWastePage() {
             </CardHeader>
             <CardContent className="grid gap-5 md:grid-cols-2">
               <div className="overflow-hidden rounded-lg border border-gray-200">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={result.imageUrl}
+                <DetectionImageOverlay
+                  imageSrc={previewUrl || result.imageUrl}
                   alt="Uploaded waste"
-                  className="h-72 w-full object-cover"
+                  detections={result.detections || []}
+                  imageClassName="w-full h-auto max-h-[28rem] object-contain bg-white"
                 />
               </div>
 
@@ -334,6 +337,17 @@ export default function ReportWastePage() {
                     {confidencePercent}
                   </p>
                 </div>
+
+                {result.detections.length > 0 && (
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-500">
+                      Bounding boxes
+                    </p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {result.detections.length} object(s) detected
+                    </p>
+                  </div>
+                )}
 
                 {(latitude !== null ||
                   longitude !== null ||

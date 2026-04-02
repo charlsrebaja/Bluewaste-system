@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import { WasteReportService } from "../services/wasteReport.service";
+import { sendError } from "../utils/http";
 
 export class WasteReportController {
   static async create(req: AuthRequest, res: Response) {
@@ -12,7 +13,12 @@ export class WasteReportController {
 
       res.status(201).json(report);
     } catch {
-      res.status(500).json({ error: "Failed to create waste report" });
+      sendError(
+        res,
+        500,
+        "Failed to create waste report",
+        "WASTE_REPORT_CREATE_FAILED",
+      );
     }
   }
 
@@ -25,7 +31,12 @@ export class WasteReportController {
 
       res.json(result);
     } catch {
-      res.status(500).json({ error: "Failed to fetch waste reports" });
+      sendError(
+        res,
+        500,
+        "Failed to fetch waste reports",
+        "WASTE_REPORT_FETCH_FAILED",
+      );
     }
   }
 }

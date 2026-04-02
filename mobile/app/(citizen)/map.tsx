@@ -19,7 +19,7 @@ export default function MapScreen() {
   const { data: reports = [] } = useQuery<MapReport[]>({
     queryKey: ["map-reports"],
     queryFn: async () => {
-      const { data } = await api.get("/reports/map");
+      const { data } = await api.get("/reports/map?limit=2000");
       return data;
     },
     refetchInterval: 30000,

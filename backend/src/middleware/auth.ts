@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 import prisma from "../config/database";
+import { sendError } from "../utils/http";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -21,9 +22,12 @@ export const authenticate = async (
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ error: "Access denied. No token provided." });
+      return sendError(
+        res,
+        401,
+        "Access denied. No token provided.",
+        "UNAUTHORIZED",
+      );
     }
 
     const token = authHeader.split(" ")[1];
@@ -42,7 +46,7 @@ export const authenticate = async (
     });
 
     if (!user || !user.isActive) {
-      return res.status(401).json({ error: "Invalid or expired token." });
+      return sendError(res, 401, "Invalid or expired token.", "UNAUTHORIZED");
     }
 
     req.user = {
@@ -55,7 +59,7 @@ export const authenticate = async (
 
     next();
   } catch (error) {
-    return res.status(401).json({ error: "Invalid or expired token." });
+    return sendError(res, 401, "Invalid or expired token.", "UNAUTHORIZED");
   }
 };
 

@@ -1,69 +1,32 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { useCreateReport, useUploadReportImages } from "@/hooks/useReports";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { useQuery } from "@tanstack/react-query";
-import api from "@/lib/api";
-import { Barangay, WASTE_CATEGORY_LABELS, WasteCategory } from "@/types";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/providers/AuthProvider";
+import { useCreateReport, useUploadReportImages } from "@/hooks/useReports";
+import { WASTE_CATEGORY_LABELS, WasteCategory } from "@/types";
+import { getApiErrorMessage } from "@/lib/apiError";
+import { DetectionBox } from "@/lib/waste-classification";
+import DetectionImageOverlay from "@/components/ai/DetectionImageOverlay";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
-  FileText,
-  MapPin,
-  Camera,
-  ChevronRight,
-  ChevronLeft,
   AlertCircle,
+  Camera,
   CheckCircle2,
-  Upload,
-  X,
+  ImagePlus,
   Loader2,
-  Info,
+  MapPin,
   Sparkles,
+  Upload,
 } from "lucide-react";
 
 const LocationPickerMap = dynamic(
   () => import("@/components/map/LocationPicker"),
   { ssr: false },
 );
-
-const reportSchema = z.object({
-  title: z.string().min(5, "Title must be at least 5 characters").max(100),
-  description: z
-    .string()
-    .min(20, "Description must be at least 20 characters")
-    .max(1000),
-  category: z.string().min(1, "Select a category"),
-  barangayId: z.string().optional(),
-  address: z.string().optional(),
-  isAnonymous: z.boolean().optional(),
-});
-
-type ReportFormData = z.infer<typeof reportSchema>;
-
-const STEPS = [
-  { id: 1, label: "Report Details", icon: FileText },
-  { id: 2, label: "Location", icon: MapPin },
-  { id: 3, label: "Photos", icon: Camera },
-];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  SOLID_WASTE: "bg-gray-100 text-gray-700",
-  HAZARDOUS: "bg-red-100 text-red-700",
-  LIQUID: "bg-blue-100 text-blue-700",
-  RECYCLABLE: "bg-green-100 text-green-700",
-  ORGANIC: "bg-amber-100 text-amber-700",
-  ELECTRONIC: "bg-purple-100 text-purple-700",
-  OTHER: "bg-slate-100 text-slate-700",
-};
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
@@ -73,6 +36,7 @@ type AnalyzeWasteResult = {
   wasteType: "Recyclable" | "Non-recyclable" | "Organic";
   confidence: number;
   labels: string[];
+  detections: DetectionBox[];
 };
 
 const ANALYSIS_TYPE_STYLES: Record<AnalyzeWasteResult["wasteType"], string> = {
@@ -81,101 +45,146 @@ const ANALYSIS_TYPE_STYLES: Record<AnalyzeWasteResult["wasteType"], string> = {
   "Non-recyclable": "bg-red-100 text-red-700 border-red-200",
 };
 
+function mapAnalysisTypeToCategory(
+  wasteType: AnalyzeWasteResult["wasteType"],
+): WasteCategory {
+  if (wasteType === "Recyclable") return "RECYCLABLE";
+  if (wasteType === "Organic") return "ORGANIC";
+  return "OTHER";
+}
+
+function buildDefaultDescription(category: WasteCategory) {
+  return `Waste report submitted via mobile capture. Category: ${WASTE_CATEGORY_LABELS[category]}.`;
+}
+
+function geolocationErrorMessage(code: number) {
+  if (code === 1)
+    return "Location permission denied. Allow location access to continue.";
+  if (code === 2) return "Could not determine your location. Please try again.";
+  if (code === 3) return "Location request timed out. Please try again.";
+  return "Unable to retrieve location.";
+}
+
 export default function SubmitReportPage() {
   const router = useRouter();
   const { token } = useAuth();
-  const [step, setStep] = useState(1);
-  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
-    null,
-  );
-  const [locationError, setLocationError] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
-  const [submitError, setSubmitError] = useState("");
-  const [photoError, setPhotoError] = useState("");
-  const [analysisError, setAnalysisError] = useState("");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] =
-    useState<AnalyzeWasteResult | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const createReport = useCreateReport();
   const uploadImages = useUploadReportImages();
 
-  const { data: barangays = [] } = useQuery<Barangay[]>({
-    queryKey: ["barangays"],
-    queryFn: async () => {
-      const { data } = await api.get("/barangays");
-      return data;
-    },
-  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-    watch,
-  } = useForm<ReportFormData>({
-    resolver: zodResolver(reportSchema),
-    defaultValues: { isAnonymous: false },
-  });
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
+    null,
+  );
+  const [locationConfirmed, setLocationConfirmed] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<WasteCategory | "">(
+    "",
+  );
+  const [description, setDescription] = useState("");
 
-  const addFiles = (incoming: FileList | File[]) => {
-    const incomingFiles = Array.from(incoming);
-    const availableSlots = 5 - files.length;
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const [locationStatus, setLocationStatus] = useState("");
 
-    if (availableSlots <= 0) {
-      setPhotoError("You can only upload up to 5 photos.");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] =
+    useState<AnalyzeWasteResult | null>(null);
+  const [analysisError, setAnalysisError] = useState("");
+
+  const [fileError, setFileError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const canSubmit = useMemo(
+    () =>
+      !!imageFile &&
+      !!location &&
+      locationConfirmed &&
+      selectedCategory !== "" &&
+      !isSubmitting,
+    [imageFile, location, locationConfirmed, selectedCategory, isSubmitting],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (imagePreview) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
+
+  const requestCurrentLocation = () => {
+    setIsLocating(true);
+    setLocationError("");
+    setLocationStatus("Getting your current location...");
+
+    if (!navigator.geolocation) {
+      setLocationError("Geolocation is not supported by this browser.");
+      setLocationStatus("");
+      setIsLocating(false);
       return;
     }
 
-    const validFiles: File[] = [];
-    for (const file of incomingFiles) {
-      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-        setPhotoError("Only JPG, PNG, and WEBP images are allowed.");
-        continue;
-      }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const nextLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
 
-      if (file.size > MAX_IMAGE_SIZE_BYTES) {
-        setPhotoError("Each image must be 8MB or smaller.");
-        continue;
-      }
+        setLocation(nextLocation);
+        setLocationConfirmed(false);
+        setLocationStatus(
+          "Location detected. Confirm or adjust the pin on the map.",
+        );
+        setIsLocating(false);
+      },
+      (error) => {
+        setLocationError(geolocationErrorMessage(error.code));
+        setLocationStatus("");
+        setIsLocating(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+      },
+    );
+  };
 
-      validFiles.push(file);
-      if (validFiles.length >= availableSlots) break;
-    }
+  const selectImage = (file: File | null) => {
+    if (!file) return;
 
-    if (validFiles.length === 0) {
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      setFileError("Only JPG, PNG, and WEBP images are allowed.");
       return;
     }
 
-    setPhotoError("");
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      setFileError("Image must be 8MB or smaller.");
+      return;
+    }
+
+    setFileError("");
+    setSubmitError("");
     setAnalysisError("");
     setAnalysisResult(null);
 
-    const newFiles = validFiles;
-    setFiles((prev) => [...prev, ...newFiles]);
-    newFiles.forEach((f) => {
-      const reader = new FileReader();
-      reader.onloadend = () =>
-        setPreviews((prev) => [...prev, reader.result as string]);
-      reader.readAsDataURL(f);
-    });
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+    }
+
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    requestCurrentLocation();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) addFiles(e.target.files);
-    // Reset input so selecting the same photo again still triggers onChange.
-    e.target.value = "";
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
+  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    selectImage(event.target.files?.[0] ?? null);
+    event.target.value = "";
   };
 
   const openCameraPicker = () => {
@@ -184,21 +193,14 @@ export default function SubmitReportPage() {
     cameraInputRef.current.click();
   };
 
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-    setPreviews((prev) => prev.filter((_, i) => i !== index));
-    setAnalysisError("");
-    setAnalysisResult(null);
-  };
-
   const handleAnalyzeWaste = async () => {
-    if (files.length === 0) {
-      setAnalysisError("Add at least one photo before analyzing.");
+    if (!imageFile) {
+      setAnalysisError("Select an image first.");
       return;
     }
 
     if (!token) {
-      setAnalysisError("Please log in again to analyze images.");
+      setAnalysisError("Your session expired. Please log in again.");
       return;
     }
 
@@ -207,16 +209,10 @@ export default function SubmitReportPage() {
 
     try {
       const formData = new FormData();
-      formData.append("image", files[0]);
-
+      formData.append("image", imageFile);
       if (location) {
         formData.append("latitude", String(location.lat));
         formData.append("longitude", String(location.lng));
-      }
-
-      const address = watch("address");
-      if (typeof address === "string" && address.trim().length > 0) {
-        formData.append("address", address.trim());
       }
 
       const response = await fetch("/api/analyze-waste", {
@@ -229,644 +225,399 @@ export default function SubmitReportPage() {
 
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.error || "Failed to analyze waste image.");
+        throw new Error(
+          payload?.message || payload?.error || "Failed to analyze image.",
+        );
       }
 
-      setAnalysisResult({
+      const result: AnalyzeWasteResult = {
         detectedObject: payload.detectedObject,
         wasteType: payload.wasteType,
         confidence: payload.confidence,
         labels: Array.isArray(payload.labels) ? payload.labels : [],
-      });
-    } catch (err) {
+        detections: Array.isArray(payload.detections) ? payload.detections : [],
+      };
+
+      setAnalysisResult(result);
+      setSelectedCategory(mapAnalysisTypeToCategory(result.wasteType));
+    } catch (error) {
       setAnalysisResult(null);
       setAnalysisError(
-        err instanceof Error ? err.message : "Failed to analyze waste image.",
+        error instanceof Error ? error.message : "Failed to analyze image.",
       );
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  const onSubmit = async (data: ReportFormData) => {
-    if (!location) {
-      setLocationError("Please set your location first");
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!token) {
+      setSubmitError("You need to log in before submitting a report.");
+      router.push("/login");
       return;
     }
+
+    if (!imageFile) {
+      setSubmitError("Please add a photo before submitting.");
+      return;
+    }
+    if (!location) {
+      setSubmitError("Location is required.");
+      return;
+    }
+    if (!locationConfirmed) {
+      setSubmitError("Please confirm your pin location on the map.");
+      return;
+    }
+    if (!selectedCategory) {
+      setSubmitError("Please select a waste type.");
+      return;
+    }
+
+    const trimmedDescription = description.trim();
+    if (trimmedDescription.length > 0 && trimmedDescription.length < 10) {
+      setSubmitError(
+        "Description must be at least 10 characters when provided.",
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError("");
+
     try {
+      const reportTitle = `Waste report - ${WASTE_CATEGORY_LABELS[selectedCategory]}`;
+      const reportDescription =
+        trimmedDescription.length > 0
+          ? trimmedDescription
+          : buildDefaultDescription(selectedCategory);
+
       const report = await createReport.mutateAsync({
-        title: data.title,
-        description: data.description,
-        category: data.category as WasteCategory,
+        title: reportTitle,
+        description: reportDescription,
+        category: selectedCategory,
         latitude: location.lat,
         longitude: location.lng,
-        address: data.address,
-        barangayId: data.barangayId || undefined,
-        isAnonymous: data.isAnonymous,
       });
-      if (files.length > 0 && report?.id) {
-        await uploadImages.mutateAsync({
-          reportId: report.id,
-          files,
-          type: "REPORT",
-        });
-      }
+
+      await uploadImages.mutateAsync({
+        reportId: report.id,
+        files: [imageFile],
+        type: "REPORT",
+      });
+
       router.push("/citizen/my-reports");
-    } catch (err: any) {
-      setSubmitError(err?.response?.data?.message || "Failed to submit report");
+    } catch (error: any) {
+      if (error?.response?.status === 401) {
+        setSubmitError("Session expired. Please log in and try again.");
+        router.push("/login");
+        return;
+      }
+
+      setSubmitError(
+        getApiErrorMessage(error, "Failed to submit report. Please try again."),
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50/50 to-gray-50 pb-16">
-      {/* Page Header */}
-      <div className="bg-white border-b px-4 py-4 sm:px-6 sm:py-5">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
-            Submit a Waste Report
+    <div className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-emerald-50 pb-16">
+      <div className="border-b bg-white/90 backdrop-blur px-4 py-4 sm:py-5">
+        <div className="mx-auto max-w-3xl">
+          <h1 className="text-2xl font-bold text-gray-900">
+            Submit Waste Report
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-gray-500">
-            Help keep Panabo City clean — fill out the form below to report a
-            waste issue.
+          <p className="mt-1 text-sm text-gray-500">
+            Capture or upload one photo, confirm location on the map, then send
+            the report.
           </p>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        {/* Step Indicator */}
-        <div className="mb-6 sm:mb-8">
-          <div className="flex items-center justify-between gap-1 sm:gap-2">
-            {STEPS.map((s, i) => {
-              const Icon = s.icon;
-              const isActive = step === s.id;
-              const isDone = step > s.id;
-              return (
-                <div key={s.id} className="flex-1 flex items-center min-w-0">
-                  <div className="flex flex-col items-center flex-1">
-                    <div
-                      className={`w-8 sm:w-10 h-8 sm:h-10 rounded-full flex items-center justify-center border-2 transition-all flex-shrink-0 ${
-                        isDone
-                          ? "bg-primary border-primary text-white"
-                          : isActive
-                            ? "bg-white border-primary text-primary shadow-sm"
-                            : "bg-white border-gray-200 text-gray-400"
-                      }`}
-                    >
-                      {isDone ? (
-                        <CheckCircle2 className="w-4 sm:w-5 h-4 sm:h-5" />
-                      ) : (
-                        <Icon className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
-                      )}
-                    </div>
-                    <span
-                      className={`mt-1 sm:mt-1.5 text-[10px] sm:text-xs font-medium whitespace-nowrap ${
-                        isActive
-                          ? "text-primary"
-                          : isDone
-                            ? "text-gray-600"
-                            : "text-gray-400"
-                      }`}
-                    >
-                      {s.label.split(" ")[0]}
-                    </span>
-                  </div>
-                  {i < STEPS.length - 1 && (
-                    <div
-                      className={`h-0.5 flex-1 mx-0.5 sm:mx-1 mb-4 sm:mb-5 rounded transition-all ${
-                        step > s.id ? "bg-primary" : "bg-gray-200"
-                      }`}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      <div className="mx-auto max-w-3xl px-4 py-6 space-y-5">
+        {!imageFile && (
+          <section className="rounded-2xl border bg-white p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex items-center gap-2">
+              <ImagePlus className="h-5 w-5 text-blue-600" />
+              <h2 className="text-lg font-semibold text-gray-900">
+                Start With a Photo
+              </h2>
+            </div>
+            <p className="text-sm text-gray-500">
+              Choose how you want to add your waste image.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button
+                type="button"
+                className="h-12 gap-2"
+                onClick={openCameraPicker}
+              >
+                <Camera className="h-4 w-4" /> Take a Photo
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 gap-2"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4" /> Upload Image
+              </Button>
+            </div>
+            <p className="text-xs text-gray-400">
+              Supported: JPG, PNG, WEBP up to 8MB
+            </p>
+          </section>
+        )}
 
-        <form onSubmit={handleSubmit(onSubmit)}>
-          {/* ── Step 1: Report Details ── */}
-          {step === 1 && (
-            <div className="bg-white rounded-xl sm:rounded-2xl border shadow-sm overflow-hidden">
-              <div className="px-4 sm:px-6 py-3 sm:py-4 border-b bg-gray-50/60 flex items-center gap-2">
-                <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-                <h2 className="text-xs sm:text-sm font-semibold text-gray-700 uppercase tracking-wide">
+        {imageFile && (
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <section className="rounded-2xl border bg-white p-4 sm:p-6 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Camera className="h-5 w-5 text-blue-600" />
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Image Preview
+                  </h2>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={openCameraPicker}
+                    className="gap-2"
+                  >
+                    <Camera className="h-4 w-4" /> Retake
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="gap-2"
+                  >
+                    <Upload className="h-4 w-4" /> Replace
+                  </Button>
+                </div>
+              </div>
+              {imagePreview && (
+                <DetectionImageOverlay
+                  imageSrc={imagePreview}
+                  alt="Selected waste"
+                  detections={analysisResult?.detections || []}
+                  imageClassName="w-full h-auto max-h-[28rem] object-contain bg-gray-50"
+                />
+              )}
+            </section>
+
+            <section className="rounded-2xl border bg-white p-4 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-blue-600" />
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Location
+                  </h2>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={requestCurrentLocation}
+                  disabled={isLocating}
+                >
+                  {isLocating ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Detecting...
+                    </span>
+                  ) : (
+                    "Detect Again"
+                  )}
+                </Button>
+              </div>
+
+              {locationStatus && (
+                <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  {locationStatus}
+                </p>
+              )}
+
+              {locationError && (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4" /> {locationError}
+                </div>
+              )}
+
+              <div className="rounded-xl overflow-hidden border border-gray-200">
+                <LocationPickerMap
+                  value={location}
+                  onChange={(nextLocation) => {
+                    setLocation(nextLocation);
+                    setLocationConfirmed(false);
+                    setLocationError("");
+                  }}
+                />
+              </div>
+
+              {location && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                  <p className="text-sm text-gray-600">
+                    {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setLocationConfirmed(true)}
+                    className="gap-1"
+                  >
+                    <CheckCircle2 className="h-4 w-4" /> Confirm Location
+                  </Button>
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border bg-white p-4 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold text-gray-900">
                   Report Details
                 </h2>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2"
+                  onClick={handleAnalyzeWaste}
+                  disabled={isAnalyzing || !imageFile}
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" /> Analyze Waste
+                    </>
+                  )}
+                </Button>
               </div>
 
-              <div className="px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-                {/* Title */}
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="title"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Report Title <span className="text-red-500">*</span>
-                  </Label>
-                  <Input
-                    id="title"
-                    placeholder="e.g. Illegal dumping near public market"
-                    className={`h-10 ${errors.title ? "border-red-400 focus-visible:ring-red-400" : ""}`}
-                    {...register("title")}
-                  />
-                  {errors.title ? (
-                    <p className="flex items-center gap-1 text-xs text-red-500">
-                      <AlertCircle className="w-3 h-3" /> {errors.title.message}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-gray-400">5–100 characters</p>
-                  )}
+              {analysisError && (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4" /> {analysisError}
                 </div>
+              )}
 
-                {/* Description */}
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="description"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Description <span className="text-red-500">*</span>
-                  </Label>
-                  <Textarea
-                    id="description"
-                    placeholder="Describe the waste, its approximate size, any smell, or other relevant details..."
-                    rows={4}
-                    className={`resize-none ${errors.description ? "border-red-400 focus-visible:ring-red-400" : ""}`}
-                    {...register("description")}
-                  />
-                  {errors.description ? (
-                    <p className="flex items-center gap-1 text-xs text-red-500">
-                      <AlertCircle className="w-3 h-3" />{" "}
-                      {errors.description.message}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-gray-400">
-                      Minimum 20 characters
-                    </p>
-                  )}
-                </div>
-
-                {/* Category */}
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="category"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Waste Category <span className="text-red-500">*</span>
-                  </Label>
-                  <select
-                    id="category"
-                    title="Select waste category"
-                    className={`w-full rounded-md border px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ring ${
-                      errors.category ? "border-red-400" : "border-input"
-                    }`}
-                    {...register("category")}
-                  >
-                    <option value="">Select a category...</option>
-                    {Object.entries(WASTE_CATEGORY_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                  {errors.category && (
-                    <p className="flex items-center gap-1 text-xs text-red-500">
-                      <AlertCircle className="w-3 h-3" />{" "}
-                      {errors.category.message}
-                    </p>
-                  )}
-                </div>
-
-                {/* Barangay */}
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="barangayId"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Barangay
-                  </Label>
-                  <select
-                    id="barangayId"
-                    title="Select barangay"
-                    className="w-full rounded-md border border-input px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ring"
-                    {...register("barangayId")}
-                  >
-                    <option value="">Select barangay (optional)</option>
-                    {barangays.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Address */}
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="address"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Address / Landmark
-                  </Label>
-                  <Input
-                    id="address"
-                    placeholder="e.g. Near Panabo Public Market, beside the basketball court"
-                    {...register("address")}
-                  />
-                  <p className="text-xs text-gray-400">
-                    Help the field team find the location faster
+              {analysisResult && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                    AI Suggestion
                   </p>
-                </div>
-
-                {/* Anonymous */}
-                <label className="flex items-center gap-3 py-3 px-4 rounded-lg border border-dashed border-gray-200 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors">
-                  <input
-                    type="checkbox"
-                    title="Submit this report anonymously"
-                    {...register("isAnonymous")}
-                    className="w-4 h-4 rounded border-gray-300 accent-primary"
-                  />
-                  <div>
-                    <p className="text-sm font-medium text-gray-700">
-                      Submit anonymously
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      Your name will not be shown on this report
-                    </p>
-                  </div>
-                </label>
-
-                <div className="flex justify-end pt-2">
-                  <Button
-                    type="button"
-                    onClick={() => setStep(2)}
-                    className="gap-2"
-                  >
-                    Next: Set Location <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Step 2: Location ── */}
-          {step === 2 && (
-            <div className="bg-white rounded-xl sm:rounded-2xl border shadow-sm overflow-hidden">
-              <div className="px-4 sm:px-6 py-3 sm:py-4 border-b bg-gray-50/60 flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-primary flex-shrink-0" />
-                <h2 className="text-xs sm:text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  Pin the Location
-                </h2>
-              </div>
-
-              <div className="px-4 sm:px-6 py-4 sm:py-6 space-y-4">
-                {/* Instruction banner */}
-                <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-blue-700">
-                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>
-                    <strong>Click on the map</strong> to pin the exact waste
-                    location, or use the <strong>GPS button</strong> to
-                    auto-detect your current position. You can also drag the pin
-                    to adjust.
-                  </span>
-                </div>
-
-                {/* Map */}
-                <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
-                  <LocationPickerMap
-                    value={location}
-                    onChange={(loc) => {
-                      setLocation(loc);
-                      setLocationError("");
-                    }}
-                  />
-                </div>
-
-                {/* Coordinate display */}
-                {location && (
-                  <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-2.5 text-sm text-green-700">
-                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                    <span>
-                      Location pinned:{" "}
-                      <strong>
-                        {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
-                      </strong>
+                  <p className="text-sm text-gray-700 capitalize">
+                    Detected object:{" "}
+                    <strong>{analysisResult.detectedObject}</strong>
+                  </p>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span
+                      className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${ANALYSIS_TYPE_STYLES[analysisResult.wasteType]}`}
+                    >
+                      {analysisResult.wasteType}
+                    </span>
+                    <span className="text-gray-500">
+                      Confidence: {(analysisResult.confidence * 100).toFixed(1)}
+                      %
                     </span>
                   </div>
-                )}
-
-                {locationError && (
-                  <p className="flex items-center gap-1.5 text-sm text-red-500">
-                    <AlertCircle className="w-4 h-4" /> {locationError}
-                  </p>
-                )}
-
-                <div className="flex justify-between pt-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setStep(1)}
-                    className="gap-2"
-                  >
-                    <ChevronLeft className="w-4 h-4" /> Back
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      if (!location) {
-                        setLocationError(
-                          "Please pin the waste location on the map.",
-                        );
-                        return;
-                      }
-                      setStep(3);
-                    }}
-                    className="gap-2"
-                  >
-                    Next: Add Photos <ChevronRight className="w-4 h-4" />
-                  </Button>
+                  {analysisResult.detections.length > 0 && (
+                    <p className="text-xs text-emerald-700">
+                      Bounding boxes: {analysisResult.detections.length}
+                    </p>
+                  )}
                 </div>
-              </div>
-            </div>
-          )}
+              )}
 
-          {/* ── Step 3: Photos & Submit ── */}
-          {step === 3 && (
-            <div className="bg-white rounded-xl sm:rounded-2xl border shadow-sm overflow-hidden">
-              <div className="px-4 sm:px-6 py-3 sm:py-4 border-b bg-gray-50/60 flex items-center gap-2">
-                <Camera className="w-4 h-4 text-primary flex-shrink-0" />
-                <h2 className="text-xs sm:text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  Add Photos
-                </h2>
-                <span className="ml-auto text-xs text-gray-400">
-                  {files.length}/5 photos
-                </span>
+              <div className="space-y-1.5">
+                <Label htmlFor="waste-type">
+                  Detected or Selected Waste Type
+                </Label>
+                <select
+                  id="waste-type"
+                  title="Select waste type"
+                  className="w-full rounded-md border border-input px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={selectedCategory}
+                  onChange={(event) =>
+                    setSelectedCategory(event.target.value as WasteCategory)
+                  }
+                >
+                  <option value="">Select waste type</option>
+                  {Object.entries(WASTE_CATEGORY_LABELS).map(([key, value]) => (
+                    <option key={key} value={key}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-                <p className="text-xs sm:text-sm text-gray-500">
-                  Upload up to 5 photos of the waste issue to help the cleanup
-                  team better assess the situation.
+              <div className="space-y-1.5">
+                <Label htmlFor="description">Description (optional)</Label>
+                <Textarea
+                  id="description"
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  placeholder="Add extra details about the waste condition or surroundings"
+                  rows={4}
+                />
+                <p className="text-xs text-gray-400">
+                  Leave empty to submit with an auto-generated description.
                 </p>
-
-                <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm text-blue-700">
-                  AI analysis will use the first attached photo to detect likely
-                  waste type.
-                </div>
-
-                {/* Drop Zone */}
-                {files.length < 5 && (
-                  <div
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setDragOver(true);
-                    }}
-                    onDragLeave={() => setDragOver(false)}
-                    onDrop={handleDrop}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`flex flex-col items-center justify-center gap-2 sm:gap-3 border-2 border-dashed rounded-lg sm:rounded-xl py-6 sm:py-10 cursor-pointer transition-all ${
-                      dragOver
-                        ? "border-primary bg-primary/5 scale-[1.01]"
-                        : "border-gray-200 bg-gray-50 hover:border-primary/50 hover:bg-blue-50/30"
-                    }`}
-                  >
-                    <div className="w-10 sm:w-12 h-10 sm:h-12 bg-primary/10 rounded-full flex items-center justify-center">
-                      <Upload className="w-4 sm:w-5 h-4 sm:h-5 text-primary" />
-                    </div>
-                    <div className="text-center px-2">
-                      <p className="text-sm font-medium text-gray-700">
-                        Drag & drop photos here
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        or use camera/browse — JPG, PNG, WEBP supported
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {files.length < 5 && (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={openCameraPicker}
-                      className="gap-2"
-                    >
-                      <Camera className="w-4 h-4" />
-                      Take Photo
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="gap-2"
-                    >
-                      <Upload className="w-4 h-4" />
-                      Browse Files
-                    </Button>
-                  </div>
-                )}
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  title="Upload report photos"
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
-
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  title="Take report photo"
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleAnalyzeWaste}
-                    disabled={isAnalyzing || files.length === 0}
-                    className="gap-2"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />{" "}
-                        Analyzing...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" /> Analyze Waste
-                      </>
-                    )}
-                  </Button>
-                  <span className="text-xs text-gray-500">
-                    Uses Google Cloud Vision labels
-                  </span>
-                </div>
-
-                {photoError && (
-                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    {photoError}
-                  </div>
-                )}
-
-                {analysisError && (
-                  <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    {analysisError}
-                  </div>
-                )}
-
-                {analysisResult && (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
-                    <p className="text-xs uppercase tracking-wide font-semibold text-emerald-700">
-                      AI Detection Result
-                    </p>
-                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm text-gray-700">
-                      <span className="font-medium text-gray-600">Object</span>
-                      <span className="capitalize">
-                        {analysisResult.detectedObject}
-                      </span>
-                      <span className="font-medium text-gray-600">Type</span>
-                      <span>
-                        <span
-                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${ANALYSIS_TYPE_STYLES[analysisResult.wasteType]}`}
-                        >
-                          {analysisResult.wasteType}
-                        </span>
-                      </span>
-                      <span className="font-medium text-gray-600">
-                        Confidence
-                      </span>
-                      <span>
-                        {(analysisResult.confidence * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    {analysisResult.labels.length > 0 && (
-                      <p className="text-xs text-gray-500">
-                        Labels: {analysisResult.labels.slice(0, 6).join(", ")}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* Preview Grid */}
-                {previews.length > 0 && (
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-                    {previews.map((preview, i) => (
-                      <div
-                        key={i}
-                        className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 group shadow-sm"
-                      >
-                        <img
-                          src={preview}
-                          alt={`Preview ${i + 1}`}
-                          className="h-full w-full object-cover"
-                        />
-                        <button
-                          type="button"
-                          title="Remove photo"
-                          onClick={() => removeFile(i)}
-                          className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                    {files.length < 5 && (
-                      <button
-                        type="button"
-                        title="Add more photos"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="aspect-square rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-400 hover:border-primary hover:text-primary transition-colors"
-                      >
-                        <Upload className="w-5 h-5" />
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Error */}
-                {submitError && (
-                  <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    {submitError}
-                  </div>
-                )}
-
-                {/* Summary Recap */}
-                <div className="bg-gray-50 border rounded-xl p-4 space-y-2 text-sm">
-                  <p className="font-semibold text-gray-700 text-xs uppercase tracking-wide mb-2">
-                    Report Summary
-                  </p>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-gray-600">
-                    <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5" />
-                    <span>Report details filled</span>
-                    {location ? (
-                      <>
-                        <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5" />
-                        <span>
-                          Location pinned: {location.lat.toFixed(4)},{" "}
-                          {location.lng.toFixed(4)}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5" />
-                        <span className="text-amber-600">Location not set</span>
-                      </>
-                    )}
-                    <CheckCircle2
-                      className={`w-4 h-4 mt-0.5 ${files.length > 0 ? "text-green-500" : "text-gray-300"}`}
-                    />
-                    <span className={files.length > 0 ? "" : "text-gray-400"}>
-                      {files.length > 0
-                        ? `${files.length} photo${files.length > 1 ? "s" : ""} attached`
-                        : "No photos (optional)"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex justify-between pt-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setStep(2)}
-                    className="gap-2"
-                  >
-                    <ChevronLeft className="w-4 h-4" /> Back
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="gap-2 bg-green-600 hover:bg-green-700 text-white px-8 font-semibold"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />{" "}
-                        Submitting...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" /> Submit Report
-                      </>
-                    )}
-                  </Button>
-                </div>
               </div>
-            </div>
-          )}
-        </form>
+            </section>
+
+            {fileError && (
+              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <AlertCircle className="h-4 w-4" /> {fileError}
+              </div>
+            )}
+
+            {submitError && (
+              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <AlertCircle className="h-4 w-4" /> {submitError}
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              disabled={!canSubmit}
+              className="w-full h-12 text-base font-semibold gap-2"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Saving Report...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-4 w-4" /> Submit Report
+                </>
+              )}
+            </Button>
+          </form>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          title="Upload waste image"
+          className="hidden"
+          onChange={handleFileInput}
+        />
+
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          title="Capture waste image"
+          className="hidden"
+          onChange={handleFileInput}
+        />
       </div>
     </div>
   );

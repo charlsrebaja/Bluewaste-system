@@ -7,6 +7,7 @@ import {
   buildPaginatedResponse,
 } from "../utils/pagination";
 import { hashPassword } from "../utils/password";
+import { sendError } from "../utils/http";
 
 export class UserController {
   static async getFieldWorkers(req: AuthRequest, res: Response) {
@@ -26,7 +27,7 @@ export class UserController {
       });
       res.json(workers);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch field workers" });
+      sendError(res, 500, "Failed to fetch field workers", "USER_FETCH_FAILED");
     }
   }
 
@@ -70,7 +71,7 @@ export class UserController {
 
       res.json(buildPaginatedResponse(users, total, pagination));
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch users" });
+      sendError(res, 500, "Failed to fetch users", "USER_FETCH_FAILED");
     }
   }
 
@@ -80,16 +81,21 @@ export class UserController {
         req.body;
 
       if (!email || !password || !firstName || !lastName || !role) {
-        return res.status(400).json({ error: "Missing required fields" });
+        return sendError(
+          res,
+          400,
+          "Missing required fields",
+          "VALIDATION_ERROR",
+        );
       }
 
       if (!Object.values(Role).includes(role)) {
-        return res.status(400).json({ error: "Invalid role" });
+        return sendError(res, 400, "Invalid role", "VALIDATION_ERROR");
       }
 
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing) {
-        return res.status(409).json({ error: "Email already registered" });
+        return sendError(res, 409, "Email already registered", "EMAIL_TAKEN");
       }
 
       const hashedPassword = await hashPassword(password);
@@ -120,7 +126,7 @@ export class UserController {
 
       res.status(201).json(user);
     } catch (error) {
-      res.status(500).json({ error: "Failed to create user" });
+      sendError(res, 500, "Failed to create user", "USER_CREATE_FAILED");
     }
   }
 
@@ -132,17 +138,17 @@ export class UserController {
 
       const existing = await prisma.user.findUnique({ where: { id } });
       if (!existing) {
-        return res.status(404).json({ error: "User not found" });
+        return sendError(res, 404, "User not found", "USER_NOT_FOUND");
       }
 
       if (role && !Object.values(Role).includes(role)) {
-        return res.status(400).json({ error: "Invalid role" });
+        return sendError(res, 400, "Invalid role", "VALIDATION_ERROR");
       }
 
       if (email && email !== existing.email) {
         const emailTaken = await prisma.user.findUnique({ where: { email } });
         if (emailTaken) {
-          return res.status(409).json({ error: "Email already in use" });
+          return sendError(res, 409, "Email already in use", "EMAIL_TAKEN");
         }
       }
 
@@ -173,7 +179,7 @@ export class UserController {
 
       res.json(user);
     } catch (error) {
-      res.status(500).json({ error: "Failed to update user" });
+      sendError(res, 500, "Failed to update user", "USER_UPDATE_FAILED");
     }
   }
 
@@ -183,21 +189,31 @@ export class UserController {
       const requestingUserId = req.user?.id;
 
       if (id === requestingUserId) {
-        return res
-          .status(400)
-          .json({ error: "Cannot delete your own account" });
+        return sendError(
+          res,
+          400,
+          "Cannot delete your own account",
+          "VALIDATION_ERROR",
+        );
       }
 
       const existing = await prisma.user.findUnique({ where: { id } });
       if (!existing) {
-        return res.status(404).json({ error: "User not found" });
+        return sendError(res, 404, "User not found", "USER_NOT_FOUND");
       }
 
-      await prisma.user.delete({ where: { id } });
+      if (!existing.isActive) {
+        return res.json({ message: "User already deactivated" });
+      }
 
-      res.json({ message: "User deleted successfully" });
+      await prisma.user.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      res.json({ message: "User deactivated successfully" });
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete user" });
+      sendError(res, 500, "Failed to delete user", "USER_DELETE_FAILED");
     }
   }
 }

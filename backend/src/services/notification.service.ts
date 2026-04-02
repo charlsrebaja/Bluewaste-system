@@ -6,6 +6,37 @@ import {
 } from "../utils/pagination";
 
 export class NotificationService {
+  private static readonly ADMIN_CACHE_TTL_MS = 60_000;
+
+  private static adminIdCache: {
+    ids: string[];
+    expiresAt: number;
+  } | null = null;
+
+  private static async getActiveAdminIds() {
+    if (
+      this.adminIdCache &&
+      this.adminIdCache.expiresAt >= Date.now() &&
+      this.adminIdCache.ids.length > 0
+    ) {
+      return this.adminIdCache.ids;
+    }
+
+    const admins = await prisma.user.findMany({
+      where: { role: Role.LGU_ADMIN, isActive: true },
+      select: { id: true },
+    });
+
+    const ids = admins.map((admin) => admin.id);
+
+    this.adminIdCache = {
+      ids,
+      expiresAt: Date.now() + this.ADMIN_CACHE_TTL_MS,
+    };
+
+    return ids;
+  }
+
   static async create(data: {
     userId: string;
     title: string;
@@ -30,13 +61,10 @@ export class NotificationService {
     reportId?: string,
     type: NotificationType = NotificationType.NEW_REPORT,
   ) {
-    const admins = await prisma.user.findMany({
-      where: { role: Role.LGU_ADMIN, isActive: true },
-      select: { id: true },
-    });
+    const adminIds = await this.getActiveAdminIds();
 
-    const notifications = admins.map((admin) => ({
-      userId: admin.id,
+    const notifications = adminIds.map((adminId) => ({
+      userId: adminId,
       title,
       message,
       type,

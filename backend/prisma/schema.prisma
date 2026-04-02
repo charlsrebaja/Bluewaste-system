@@ -91,6 +91,7 @@ model User {
   wasteReports    WasteReport[]
 
   @@index([role])
+  @@index([role, isActive])
   @@index([email])
 }
 
@@ -133,6 +134,12 @@ model Report {
   @@index([reporterId])
   @@index([assignedToId])
   @@index([latitude, longitude])
+  @@index([isDeleted, createdAt])
+  @@index([isDeleted, status, createdAt])
+  @@index([isDeleted, category, createdAt])
+  @@index([isDeleted, barangayId, createdAt])
+  @@index([isDeleted, reporterId, createdAt])
+  @@index([isDeleted, assignedToId, createdAt])
 }
 
 model ReportImage {
@@ -194,6 +201,7 @@ model Notification {
   report   Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
 
   @@index([userId, isRead])
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
@@ -222,7 +230,7 @@ model WasteReport {
   latitude       Float?
   longitude      Float?
   address        String?
-  labels         String[]
+  labels         String[]      @default([])
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -232,4 +240,5 @@ model WasteReport {
   @@index([wasteType])
   @@index([createdAt])
   @@index([reporterId])
+  @@index([reporterId, createdAt])
 }

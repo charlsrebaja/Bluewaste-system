@@ -3,37 +3,31 @@ import { ReportStatus, Prisma } from "@prisma/client";
 
 export class AnalyticsService {
   static async getOverview() {
-    const [total, pending, verified, scheduled, inProgress, cleaned, rejected] =
-      await Promise.all([
-        prisma.report.count({ where: { isDeleted: false } }),
-        prisma.report.count({
-          where: { status: ReportStatus.PENDING, isDeleted: false },
-        }),
-        prisma.report.count({
-          where: { status: ReportStatus.VERIFIED, isDeleted: false },
-        }),
-        prisma.report.count({
-          where: { status: ReportStatus.CLEANUP_SCHEDULED, isDeleted: false },
-        }),
-        prisma.report.count({
-          where: { status: ReportStatus.IN_PROGRESS, isDeleted: false },
-        }),
-        prisma.report.count({
-          where: { status: ReportStatus.CLEANED, isDeleted: false },
-        }),
-        prisma.report.count({
-          where: { status: ReportStatus.REJECTED, isDeleted: false },
-        }),
-      ]);
+    const [total, groupedByStatus] = await Promise.all([
+      prisma.report.count({ where: { isDeleted: false } }),
+      prisma.report.groupBy({
+        by: ["status"],
+        _count: { id: true },
+        where: { isDeleted: false },
+      }),
+    ]);
+
+    const statusCounts = groupedByStatus.reduce(
+      (acc, row) => {
+        acc[row.status] = row._count.id;
+        return acc;
+      },
+      {} as Record<ReportStatus, number>,
+    );
 
     return {
       total,
-      pending,
-      verified,
-      cleanupScheduled: scheduled,
-      inProgress,
-      cleaned,
-      rejected,
+      pending: statusCounts[ReportStatus.PENDING] || 0,
+      verified: statusCounts[ReportStatus.VERIFIED] || 0,
+      cleanupScheduled: statusCounts[ReportStatus.CLEANUP_SCHEDULED] || 0,
+      inProgress: statusCounts[ReportStatus.IN_PROGRESS] || 0,
+      cleaned: statusCounts[ReportStatus.CLEANED] || 0,
+      rejected: statusCounts[ReportStatus.REJECTED] || 0,
     };
   }
 
@@ -44,38 +38,36 @@ export class AnalyticsService {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const reports = await prisma.report.findMany({
-      where: {
-        createdAt: { gte: startDate },
-        isDeleted: false,
-      },
-      select: {
-        createdAt: true,
-        status: true,
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    const truncateUnit =
+      period === "weekly" ? "week" : period === "monthly" ? "month" : "day";
 
-    // Group by date
-    const grouped: Record<string, number> = {};
-    reports.forEach((report) => {
-      let key: string;
-      const date = new Date(report.createdAt);
+    const rows = await prisma.$queryRaw<Array<{ bucket: Date; count: number }>>(
+      Prisma.sql`
+        SELECT date_trunc(${truncateUnit}::text, "createdAt") AS bucket,
+               COUNT(*)::int AS count
+        FROM "Report"
+        WHERE "isDeleted" = false
+          AND "createdAt" >= ${startDate}
+        GROUP BY bucket
+        ORDER BY bucket ASC
+      `,
+    );
 
-      if (period === "daily") {
-        key = date.toISOString().split("T")[0];
-      } else if (period === "weekly") {
-        const weekStart = new Date(date);
-        weekStart.setDate(date.getDate() - date.getDay());
-        key = weekStart.toISOString().split("T")[0];
-      } else {
-        key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    return rows.map((row) => {
+      const bucketDate = new Date(row.bucket);
+
+      if (period === "monthly") {
+        return {
+          date: `${bucketDate.getUTCFullYear()}-${String(bucketDate.getUTCMonth() + 1).padStart(2, "0")}`,
+          count: row.count,
+        };
       }
 
-      grouped[key] = (grouped[key] || 0) + 1;
+      return {
+        date: bucketDate.toISOString().split("T")[0],
+        count: row.count,
+      };
     });
-
-    return Object.entries(grouped).map(([date, count]) => ({ date, count }));
   }
 
   static async getCategoryDistribution() {
@@ -93,29 +85,24 @@ export class AnalyticsService {
   }
 
   static async getBarangayStats() {
-    const stats = await prisma.report.groupBy({
-      by: ["barangayId"],
-      _count: { id: true },
-      where: { isDeleted: false, barangayId: { not: null } },
-      orderBy: { _count: { id: "desc" } },
-    });
+    const rows = await prisma.$queryRaw<
+      Array<{ barangayId: string; barangayName: string | null; count: number }>
+    >(Prisma.sql`
+      SELECT r."barangayId" AS "barangayId",
+             b."name" AS "barangayName",
+             COUNT(*)::int AS count
+      FROM "Report" r
+      LEFT JOIN "Barangay" b ON b."id" = r."barangayId"
+      WHERE r."isDeleted" = false
+        AND r."barangayId" IS NOT NULL
+      GROUP BY r."barangayId", b."name"
+      ORDER BY count DESC
+    `);
 
-    // Get barangay names
-    const barangayIds = stats
-      .filter((s) => s.barangayId !== null)
-      .map((s) => s.barangayId as string);
-
-    const barangays = await prisma.barangay.findMany({
-      where: { id: { in: barangayIds } },
-      select: { id: true, name: true },
-    });
-
-    const barangayMap = new Map(barangays.map((b) => [b.id, b.name]));
-
-    return stats.map((s) => ({
-      barangayId: s.barangayId,
-      barangayName: barangayMap.get(s.barangayId!) || "Unknown",
-      count: s._count.id,
+    return rows.map((row) => ({
+      barangayId: row.barangayId,
+      barangayName: row.barangayName || "Unknown",
+      count: row.count,
     }));
   }
 

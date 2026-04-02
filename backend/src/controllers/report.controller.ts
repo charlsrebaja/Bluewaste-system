@@ -3,6 +3,7 @@ import { ReportService } from "../services/report.service";
 import { AuthRequest } from "../middleware/auth";
 import prisma from "../config/database";
 import { CloudinaryService } from "../services/cloudinary.service";
+import { sendError } from "../utils/http";
 
 export class ReportController {
   static async create(req: AuthRequest, res: Response) {
@@ -13,7 +14,7 @@ export class ReportController {
       });
       res.status(201).json(report);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to create report" });
+      sendError(res, 500, "Failed to create report", "REPORT_CREATE_FAILED");
     }
   }
 
@@ -22,7 +23,7 @@ export class ReportController {
       const result = await ReportService.findAll(req.query as any);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch reports" });
+      sendError(res, 500, "Failed to fetch reports", "REPORT_FETCH_FAILED");
     }
   }
 
@@ -32,9 +33,9 @@ export class ReportController {
       res.json(report);
     } catch (error: any) {
       if (error.message === "Report not found") {
-        return res.status(404).json({ error: error.message });
+        return sendError(res, 404, error.message, "REPORT_NOT_FOUND");
       }
-      res.status(500).json({ error: "Failed to fetch report" });
+      sendError(res, 500, "Failed to fetch report", "REPORT_FETCH_FAILED");
     }
   }
 
@@ -50,9 +51,14 @@ export class ReportController {
       res.json(report);
     } catch (error: any) {
       if (error.message === "Report not found") {
-        return res.status(404).json({ error: error.message });
+        return sendError(res, 404, error.message, "REPORT_NOT_FOUND");
       }
-      res.status(500).json({ error: "Failed to update status" });
+      sendError(
+        res,
+        500,
+        "Failed to update status",
+        "REPORT_STATUS_UPDATE_FAILED",
+      );
     }
   }
 
@@ -70,9 +76,14 @@ export class ReportController {
         error.message === "Report not found" ||
         error.message === "Invalid field worker"
       ) {
-        return res.status(404).json({ error: error.message });
+        return sendError(res, 404, error.message, "REPORT_ASSIGNMENT_FAILED");
       }
-      res.status(500).json({ error: "Failed to assign worker" });
+      sendError(
+        res,
+        500,
+        "Failed to assign worker",
+        "REPORT_ASSIGNMENT_FAILED",
+      );
     }
   }
 
@@ -84,7 +95,7 @@ export class ReportController {
       );
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch reports" });
+      sendError(res, 500, "Failed to fetch reports", "REPORT_FETCH_FAILED");
     }
   }
 
@@ -96,25 +107,37 @@ export class ReportController {
       );
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch assigned reports" });
+      sendError(
+        res,
+        500,
+        "Failed to fetch assigned reports",
+        "ASSIGNED_REPORT_FETCH_FAILED",
+      );
     }
   }
 
   static async getMapData(req: Request, res: Response) {
     try {
       const reports = await ReportService.getMapData(req.query as any);
+      res.setHeader("Cache-Control", "public, max-age=15");
       res.json(reports);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch map data" });
+      sendError(res, 500, "Failed to fetch map data", "MAP_DATA_FETCH_FAILED");
     }
   }
 
   static async getHeatmapData(req: Request, res: Response) {
     try {
-      const data = await ReportService.getHeatmapData();
+      const data = await ReportService.getHeatmapData(req.query as any);
+      res.setHeader("Cache-Control", "public, max-age=15");
       res.json(data);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch heatmap data" });
+      sendError(
+        res,
+        500,
+        "Failed to fetch heatmap data",
+        "HEATMAP_FETCH_FAILED",
+      );
     }
   }
 
@@ -124,9 +147,9 @@ export class ReportController {
       res.json({ message: "Report deleted successfully" });
     } catch (error: any) {
       if (error.message === "Report not found") {
-        return res.status(404).json({ error: error.message });
+        return sendError(res, 404, error.message, "REPORT_NOT_FOUND");
       }
-      res.status(500).json({ error: "Failed to delete report" });
+      sendError(res, 500, "Failed to delete report", "REPORT_DELETE_FAILED");
     }
   }
 
@@ -136,12 +159,31 @@ export class ReportController {
       const files = req.files as Express.Multer.File[];
 
       if (!files || files.length === 0) {
-        return res.status(400).json({ error: "No files uploaded" });
+        return sendError(res, 400, "No files uploaded", "NO_FILES_UPLOADED");
       }
 
-      const report = await prisma.report.findUnique({ where: { id } });
+      const report = await prisma.report.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          reporterId: true,
+          assignedToId: true,
+        },
+      });
       if (!report) {
-        return res.status(404).json({ error: "Report not found" });
+        return sendError(res, 404, "Report not found", "REPORT_NOT_FOUND");
+      }
+
+      const requesterId = req.user?.id;
+      const requesterRole = req.user?.role;
+
+      const canUpload =
+        requesterRole === "LGU_ADMIN" ||
+        report.reporterId === requesterId ||
+        report.assignedToId === requesterId;
+
+      if (!canUpload) {
+        return sendError(res, 403, "Insufficient permissions.", "FORBIDDEN");
       }
 
       const uploadPromises = files.map(async (file) => {
@@ -159,7 +201,7 @@ export class ReportController {
       const images = await Promise.all(uploadPromises);
       res.status(201).json(images);
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to upload images" });
+      sendError(res, 500, "Failed to upload images", "IMAGE_UPLOAD_FAILED");
     }
   }
 }

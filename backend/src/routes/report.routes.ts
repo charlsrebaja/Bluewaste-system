@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ReportController } from "../controllers/report.controller";
-import { authenticate, optionalAuth } from "../middleware/auth";
+import { authenticate } from "../middleware/auth";
 import { authorize } from "../middleware/authorize";
 import { validate } from "../middleware/validate";
 import {
@@ -8,6 +8,8 @@ import {
   updateStatusSchema,
   assignWorkerSchema,
   reportFilterSchema,
+  mapFilterSchema,
+  heatmapFilterSchema,
 } from "../validators/report.validator";
 import { upload, validateUploadedImages } from "../middleware/upload";
 
@@ -19,13 +21,21 @@ router.get(
   validate(reportFilterSchema, "query"),
   ReportController.findAll,
 );
-router.get("/map", ReportController.getMapData);
-router.get("/heatmap", ReportController.getHeatmapData);
+router.get(
+  "/map",
+  validate(mapFilterSchema, "query"),
+  ReportController.getMapData,
+);
+router.get(
+  "/heatmap",
+  validate(heatmapFilterSchema, "query"),
+  ReportController.getHeatmapData,
+);
 
 // Authenticated routes
 router.post(
   "/",
-  optionalAuth,
+  authenticate,
   validate(createReportSchema),
   ReportController.create,
 );

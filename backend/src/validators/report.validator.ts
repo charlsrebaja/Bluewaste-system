@@ -77,3 +77,39 @@ export const reportFilterSchema = z.object({
     .regex(/^\d+$/, "limit must be a positive integer")
     .optional(),
 });
+
+export const mapFilterSchema = z.object({
+  status: z
+    .enum([
+      "PENDING",
+      "VERIFIED",
+      "CLEANUP_SCHEDULED",
+      "IN_PROGRESS",
+      "CLEANED",
+      "REJECTED",
+    ])
+    .optional(),
+  category: z
+    .enum([
+      "SOLID_WASTE",
+      "HAZARDOUS",
+      "LIQUID",
+      "RECYCLABLE",
+      "ORGANIC",
+      "ELECTRONIC",
+      "OTHER",
+    ])
+    .optional(),
+  barangayId: z.string().uuid().optional(),
+  limit: z
+    .string()
+    .regex(/^\d+$/, "limit must be a positive integer")
+    .optional(),
+});
+
+export const heatmapFilterSchema = z.object({
+  limit: z
+    .string()
+    .regex(/^\d+$/, "limit must be a positive integer")
+    .optional(),
+});

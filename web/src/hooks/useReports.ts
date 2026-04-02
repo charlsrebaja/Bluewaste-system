@@ -69,6 +69,7 @@ export function useMapData(filters?: {
   status?: ReportStatus;
   category?: WasteCategory;
   barangayId?: string;
+  limit?: number;
 }) {
   return useQuery<MapReport[]>({
     queryKey: ["map-data", filters],
@@ -76,8 +77,11 @@ export function useMapData(filters?: {
       const params = new URLSearchParams();
       if (filters) {
         Object.entries(filters).forEach(([key, value]) => {
-          if (value) params.append(key, value);
+          if (value) params.append(key, String(value));
         });
+      }
+      if (!params.has("limit")) {
+        params.append("limit", "5000");
       }
       const { data } = await api.get(`/reports/map?${params.toString()}`);
       return data;
@@ -90,7 +94,7 @@ export function useHeatmapData() {
   return useQuery<HeatmapPoint[]>({
     queryKey: ["heatmap-data"],
     queryFn: async () => {
-      const { data } = await api.get("/reports/heatmap");
+      const { data } = await api.get("/reports/heatmap?limit=8000");
       return data;
     },
     refetchInterval: 60000,

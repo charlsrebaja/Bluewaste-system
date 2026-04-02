@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { WasteReportController } from "../controllers/wasteReport.controller";
-import { authenticate, optionalAuth } from "../middleware/auth";
+import { authenticate } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
   createWasteReportSchema,
@@ -11,7 +11,7 @@ const router = Router();
 
 router.post(
   "/",
-  optionalAuth,
+  authenticate,
   validate(createWasteReportSchema),
   WasteReportController.create,
 );

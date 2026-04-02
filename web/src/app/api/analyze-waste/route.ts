@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { classifyWasteLabels } from "@/lib/waste-classification";
+import { classifyYoloPayload } from "@/lib/waste-classification";
 
 export const runtime = "nodejs";
 
@@ -25,27 +25,45 @@ function normalizeBaseApiUrl(url: string) {
   return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
+function toJsonError(status: number, message: string, details?: string) {
+  return NextResponse.json(
+    {
+      message,
+      error: message,
+      ...(details ? { details } : {}),
+    },
+    { status },
+  );
+}
+
+function safeParseJson(text: string) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const visionApiKey = process.env.GOOGLE_CLOUD_VISION_API_KEY;
+    const yoloApiUrl = process.env.YOLO_API_URL;
     const rawApiBase =
       process.env.BACKEND_API_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
       "http://localhost:5000/api";
 
-    if (!visionApiKey) {
-      return NextResponse.json(
-        { error: "Google Vision API key is not configured" },
-        { status: 500 },
+    if (!yoloApiUrl) {
+      return toJsonError(
+        500,
+        "YOLO API URL is not configured",
+        "Set YOLO_API_URL in web/.env.local and restart the web server.",
       );
     }
 
     const authorization = request.headers.get("authorization");
     if (!authorization?.startsWith("Bearer ")) {
-      return NextResponse.json(
-        { error: "Unauthorized request" },
-        { status: 401 },
-      );
+      return toJsonError(401, "Unauthorized request");
     }
 
     const apiBaseUrl = normalizeBaseApiUrl(rawApiBase);
@@ -53,56 +71,50 @@ export async function POST(request: NextRequest) {
 
     const image = formData.get("image");
     if (!(image instanceof File)) {
-      return NextResponse.json(
-        { error: "Image file is required" },
-        { status: 400 },
-      );
+      return toJsonError(400, "Image file is required");
     }
 
     if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
-      return NextResponse.json(
-        { error: "Unsupported image type. Use JPG, PNG, or WEBP." },
-        { status: 400 },
-      );
+      return toJsonError(400, "Unsupported image type. Use JPG, PNG, or WEBP.");
     }
 
     if (image.size > MAX_FILE_SIZE_BYTES) {
-      return NextResponse.json(
-        { error: "Image must be 8MB or smaller" },
-        { status: 400 },
-      );
+      return toJsonError(400, "Image must be 8MB or smaller");
     }
 
     const imageBuffer = Buffer.from(await image.arrayBuffer());
-    const imageBase64 = imageBuffer.toString("base64");
 
-    const visionResponse = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: { content: imageBase64 },
-              features: [{ type: "LABEL_DETECTION", maxResults: 15 }],
-            },
-          ],
-        }),
-      },
+    const yoloBody = new FormData();
+    yoloBody.append(
+      "image",
+      new Blob([imageBuffer], { type: image.type }),
+      image.name,
     );
 
-    if (!visionResponse.ok) {
-      return NextResponse.json(
-        { error: "Google Vision API request failed" },
-        { status: 502 },
+    const yoloResponse = await fetch(yoloApiUrl, {
+      method: "POST",
+      body: yoloBody,
+    });
+
+    const yoloText = await yoloResponse.text();
+    const yoloJson = safeParseJson(yoloText);
+
+    if (!yoloResponse.ok) {
+      const yoloMessage =
+        (yoloJson as any)?.message ||
+        (yoloJson as any)?.error ||
+        (typeof yoloText === "string" && yoloText.length > 0
+          ? yoloText
+          : "Unknown YOLO API error");
+
+      return toJsonError(
+        502,
+        `YOLO API request failed: ${yoloMessage}`,
+        "Check if the Railway service is running and CORS is configured.",
       );
     }
 
-    const visionJson = await visionResponse.json();
-    const labels = visionJson?.responses?.[0]?.labelAnnotations || [];
-
-    const classification = classifyWasteLabels(labels);
+    const classification = classifyYoloPayload(yoloJson);
 
     const uploadBody = new FormData();
     uploadBody.append(
@@ -118,10 +130,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!uploadResponse.ok) {
-      return NextResponse.json(
-        { error: "Failed to upload image" },
-        { status: 502 },
-      );
+      return toJsonError(502, "Failed to upload image");
     }
 
     const uploadedImage = await uploadResponse.json();
@@ -153,10 +162,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!saveResponse.ok) {
-      return NextResponse.json(
-        { error: "Failed to save waste report" },
-        { status: 502 },
-      );
+      return toJsonError(502, "Failed to save waste report");
     }
 
     const savedReport = await saveResponse.json();
@@ -168,12 +174,10 @@ export async function POST(request: NextRequest) {
       confidence: classification.confidence,
       imageUrl: uploadedImage.url,
       labels: classification.labels,
+      detections: classification.detections,
       report: savedReport,
     });
   } catch {
-    return NextResponse.json(
-      { error: "Unexpected error while analyzing image" },
-      { status: 500 },
-    );
+    return toJsonError(500, "Unexpected error while analyzing image");
   }
 }

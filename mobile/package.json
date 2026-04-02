@@ -6,7 +6,13 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "eas:configure": "npx eas-cli build:configure",
+    "build:android:preview": "npx eas-cli build -p android --profile preview",
+    "build:android:production-apk": "npx eas-cli build -p android --profile production-apk",
+    "build:android:production": "npx eas-cli build -p android --profile production",
+    "build:ios:production": "npx eas-cli build -p ios --profile production",
+    "submit:android": "npx eas-cli submit -p android --profile production"
   },
   "dependencies": {
     "expo": "~50.0.0",
