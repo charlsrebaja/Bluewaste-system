@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 import numpy as np
 import cv2
+from threading import Lock
+from typing import Optional
 
 app = FastAPI(title="BlueWaste YOLO API", version="1.0.0")
 
@@ -15,7 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = YOLO("yolov8n.pt")
+_model: Optional[YOLO] = None
+_model_lock = Lock()
 
 WASTE_CLASSES = {"bottle", "cup"}
 WASTE_CONFIDENCE_THRESHOLD = 0.5
@@ -36,9 +39,18 @@ def _to_xywh_normalized(xyxy, width: int, height: int):
     }
 
 
+def _get_model() -> YOLO:
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                _model = YOLO("yolov8n.pt")
+    return _model
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "model_loaded": _model is not None}
 
 
 @app.post("/predict")
@@ -54,6 +66,7 @@ async def predict(image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid image")
 
     height, width = frame.shape[:2]
+    model = _get_model()
     results = model.predict(source=frame, conf=0.25, verbose=False)
 
     detections = []
