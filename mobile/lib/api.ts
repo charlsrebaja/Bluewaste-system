@@ -17,6 +17,10 @@ async function getToken() {
   return cachedToken;
 }
 
+export async function getStoredAuthToken() {
+  return getToken();
+}
+
 export async function hydrateStoredSession() {
   const [token, userStr] = await Promise.all([
     SecureStore.getItemAsync(TOKEN_KEY),

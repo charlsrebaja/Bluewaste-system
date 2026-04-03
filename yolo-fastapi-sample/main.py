@@ -17,6 +17,11 @@ app.add_middleware(
 
 model = YOLO("yolov8n.pt")
 
+WASTE_CLASSES = {"bottle", "cup"}
+WASTE_CONFIDENCE_THRESHOLD = 0.5
+# Set to 2 for stricter DIRTY classification.
+DIRTY_MIN_WASTE_COUNT = 1
+
 
 def _to_xywh_normalized(xyxy, width: int, height: int):
     x1, y1, x2, y2 = xyxy
@@ -52,6 +57,7 @@ async def predict(image: UploadFile = File(...)):
     results = model.predict(source=frame, conf=0.25, verbose=False)
 
     detections = []
+    waste_count = 0
     if len(results) > 0:
         r = results[0]
         names = r.names
@@ -61,15 +67,27 @@ async def predict(image: UploadFile = File(...)):
             confidence = float(box.conf.item())
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             bbox = _to_xywh_normalized((x1, y1, x2, y2), width, height)
+            normalized_class_name = str(class_name).lower()
+            is_waste = (
+                normalized_class_name in WASTE_CLASSES
+                and confidence > WASTE_CONFIDENCE_THRESHOLD
+            )
+            if is_waste:
+                waste_count += 1
             detections.append(
                 {
                     "class": class_name,
                     "confidence": confidence,
                     "bbox": bbox,
+                    "is_waste": is_waste,
                 }
             )
+
+    status = "DIRTY" if waste_count >= DIRTY_MIN_WASTE_COUNT else "CLEAN"
 
     return {
         "detections": detections,
         "count": len(detections),
+        "waste_count": waste_count,
+        "status": status,
     }

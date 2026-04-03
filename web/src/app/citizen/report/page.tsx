@@ -35,6 +35,9 @@ type AnalyzeWasteResult = {
   detectedObject: string;
   wasteType: "Recyclable" | "Non-recyclable" | "Organic";
   confidence: number;
+  status: "DIRTY" | "CLEAN";
+  wasteCount: number;
+  count: number;
   labels: string[];
   detections: DetectionBox[];
 };
@@ -63,6 +66,29 @@ function geolocationErrorMessage(code: number) {
   if (code === 2) return "Could not determine your location. Please try again.";
   if (code === 3) return "Location request timed out. Please try again.";
   return "Unable to retrieve location.";
+}
+
+function toNonNegativeInt(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.trunc(parsed);
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeDecisionStatus(value: unknown): "DIRTY" | "CLEAN" {
+  if (typeof value !== "string") {
+    return "CLEAN";
+  }
+
+  return value.trim().toUpperCase() === "DIRTY" ? "DIRTY" : "CLEAN";
 }
 
 export default function SubmitReportPage() {
@@ -94,6 +120,7 @@ export default function SubmitReportPage() {
   const [analysisResult, setAnalysisResult] =
     useState<AnalyzeWasteResult | null>(null);
   const [analysisError, setAnalysisError] = useState("");
+  const [decisionMessage, setDecisionMessage] = useState("");
 
   const [fileError, setFileError] = useState("");
   const [submitError, setSubmitError] = useState("");
@@ -171,6 +198,7 @@ export default function SubmitReportPage() {
     setFileError("");
     setSubmitError("");
     setAnalysisError("");
+    setDecisionMessage("");
     setAnalysisResult(null);
 
     if (imagePreview) {
@@ -193,53 +221,85 @@ export default function SubmitReportPage() {
     cameraInputRef.current.click();
   };
 
-  const handleAnalyzeWaste = async () => {
+  const analyzeWasteImage = async (): Promise<AnalyzeWasteResult> => {
     if (!imageFile) {
-      setAnalysisError("Select an image first.");
-      return;
+      throw new Error("Select an image first.");
     }
 
     if (!token) {
-      setAnalysisError("Your session expired. Please log in again.");
-      return;
+      throw new Error("Your session expired. Please log in again.");
     }
 
+    const formData = new FormData();
+    formData.append("image", imageFile);
+    if (location) {
+      formData.append("latitude", String(location.lat));
+      formData.append("longitude", String(location.lng));
+    }
+
+    const response = await fetch("/api/analyze-waste", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(
+        payload?.message || payload?.error || "Failed to analyze image.",
+      );
+    }
+
+    const status = normalizeDecisionStatus(payload?.status);
+    const wasteCount = toNonNegativeInt(payload?.waste_count);
+    const count = toNonNegativeInt(
+      payload?.count,
+      Array.isArray(payload?.detections) ? payload.detections.length : 0,
+    );
+
+    return {
+      detectedObject:
+        typeof payload?.detectedObject === "string"
+          ? payload.detectedObject
+          : "unknown",
+      wasteType:
+        payload?.wasteType === "Recyclable" ||
+        payload?.wasteType === "Organic" ||
+        payload?.wasteType === "Non-recyclable"
+          ? payload.wasteType
+          : "Non-recyclable",
+      confidence:
+        typeof payload?.confidence === "number" &&
+        Number.isFinite(payload.confidence)
+          ? payload.confidence
+          : 0,
+      status,
+      wasteCount,
+      count,
+      labels: Array.isArray(payload?.labels) ? payload.labels : [],
+      detections: Array.isArray(payload?.detections) ? payload.detections : [],
+    };
+  };
+
+  const handleAnalyzeWaste = async () => {
     setIsAnalyzing(true);
     setAnalysisError("");
+    setDecisionMessage("");
 
     try {
-      const formData = new FormData();
-      formData.append("image", imageFile);
-      if (location) {
-        formData.append("latitude", String(location.lat));
-        formData.append("longitude", String(location.lng));
-      }
-
-      const response = await fetch("/api/analyze-waste", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          payload?.message || payload?.error || "Failed to analyze image.",
-        );
-      }
-
-      const result: AnalyzeWasteResult = {
-        detectedObject: payload.detectedObject,
-        wasteType: payload.wasteType,
-        confidence: payload.confidence,
-        labels: Array.isArray(payload.labels) ? payload.labels : [],
-        detections: Array.isArray(payload.detections) ? payload.detections : [],
-      };
+      const result = await analyzeWasteImage();
 
       setAnalysisResult(result);
       setSelectedCategory(mapAnalysisTypeToCategory(result.wasteType));
+      if (result.status === "CLEAN") {
+        setDecisionMessage("No waste detected. Report not saved.");
+      } else {
+        setDecisionMessage(
+          `Waste detected (${result.wasteCount}). Ready to submit.`,
+        );
+      }
     } catch (error) {
       setAnalysisResult(null);
       setAnalysisError(
@@ -286,8 +346,19 @@ export default function SubmitReportPage() {
 
     setIsSubmitting(true);
     setSubmitError("");
+    setDecisionMessage("");
 
     try {
+      const latestAnalysis = await analyzeWasteImage();
+      setAnalysisResult(latestAnalysis);
+      setSelectedCategory(mapAnalysisTypeToCategory(latestAnalysis.wasteType));
+
+      if (latestAnalysis.status === "CLEAN") {
+        setDecisionMessage("No waste detected. Report not saved.");
+        setSubmitError("No waste detected. Report not saved.");
+        return;
+      }
+
       const reportTitle = `Waste report - ${WASTE_CATEGORY_LABELS[selectedCategory]}`;
       const reportDescription =
         trimmedDescription.length > 0
@@ -511,6 +582,17 @@ export default function SubmitReportPage() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
                     AI Suggestion
                   </p>
+                  <div className="flex items-center gap-2 text-xs text-emerald-800">
+                    <span
+                      className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${analysisResult.status === "DIRTY" ? "border-red-200 bg-red-100 text-red-700" : "border-emerald-200 bg-emerald-100 text-emerald-700"}`}
+                    >
+                      {analysisResult.status}
+                    </span>
+                    <span>
+                      Waste objects: {analysisResult.wasteCount} /{" "}
+                      {analysisResult.count}
+                    </span>
+                  </div>
                   <p className="text-sm text-gray-700 capitalize">
                     Detected object:{" "}
                     <strong>{analysisResult.detectedObject}</strong>
@@ -532,6 +614,14 @@ export default function SubmitReportPage() {
                     </p>
                   )}
                 </div>
+              )}
+
+              {decisionMessage && (
+                <p
+                  className={`rounded-lg border px-3 py-2 text-sm ${analysisResult?.status === "DIRTY" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}
+                >
+                  {decisionMessage}
+                </p>
               )}
 
               <div className="space-y-1.5">

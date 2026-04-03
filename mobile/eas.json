@@ -6,17 +6,26 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_YOLO_API_URL": "https://bluewaste-system.vercel.app/web/api/analyze-waste"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production-apk": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_YOLO_API_URL": "https://bluewaste-system.vercel.app/web/api/analyze-waste"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_YOLO_API_URL": "https://bluewaste-system.vercel.app/web/api/analyze-waste"
+      },
       "android": {
         "buildType": "app-bundle"
       }

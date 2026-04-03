@@ -12,7 +12,7 @@ import {
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import api from "../../lib/api";
+import api, { getStoredAuthToken } from "../../lib/api";
 import { getApiErrorMessage } from "../../lib/apiError";
 import { WASTE_CATEGORY_LABELS, WasteCategory } from "../../types";
 
@@ -20,6 +20,35 @@ const categories = Object.entries(WASTE_CATEGORY_LABELS) as [
   WasteCategory,
   string,
 ][];
+
+const YOLO_API_URL =
+  (globalThis as any)?.process?.env?.EXPO_PUBLIC_YOLO_API_URL ||
+  "http://localhost:8000/predict";
+
+type DetectionStatus = "DIRTY" | "CLEAN";
+
+function toNonNegativeInt(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.trunc(parsed);
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeDecisionStatus(value: unknown): DetectionStatus {
+  if (typeof value !== "string") {
+    return "CLEAN";
+  }
+
+  return value.trim().toUpperCase() === "DIRTY" ? "DIRTY" : "CLEAN";
+}
 
 export default function ReportScreen() {
   const router = useRouter();
@@ -32,7 +61,48 @@ export default function ReportScreen() {
     null,
   );
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [analysisStatus, setAnalysisStatus] = useState<DetectionStatus | null>(
+    null,
+  );
+  const [analysisMessage, setAnalysisMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const analyzeWasteImage = async (image: ImagePicker.ImagePickerAsset) => {
+    const token = await getStoredAuthToken();
+    const formData = new FormData();
+    formData.append("image", {
+      uri: image.uri,
+      type: image.mimeType || "image/jpeg",
+      name: image.fileName || "report.jpg",
+    } as any);
+
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch(YOLO_API_URL, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        payload?.detail || payload?.message || "Failed to analyze image";
+      throw new Error(message);
+    }
+
+    const status = normalizeDecisionStatus(payload?.status);
+    const wasteCount = toNonNegativeInt(payload?.waste_count);
+    const count = toNonNegativeInt(
+      payload?.count,
+      Array.isArray(payload?.detections) ? payload.detections.length : 0,
+    );
+
+    return { status, wasteCount, count };
+  };
 
   const getLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -64,6 +134,8 @@ export default function ReportScreen() {
     });
     if (!result.canceled) {
       setImages((prev) => [...prev, ...result.assets].slice(0, 5));
+      setAnalysisStatus(null);
+      setAnalysisMessage("");
     }
   };
 
@@ -76,6 +148,8 @@ export default function ReportScreen() {
     const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
     if (!result.canceled && images.length < 5) {
       setImages((prev) => [...prev, ...result.assets].slice(0, 5));
+      setAnalysisStatus(null);
+      setAnalysisMessage("");
     }
   };
 
@@ -88,7 +162,37 @@ export default function ReportScreen() {
     if (!location) return Alert.alert("Error", "Please set your location");
 
     setLoading(true);
+    setAnalysisMessage("");
+    setAnalysisStatus(null);
     try {
+      if (images.length > 0) {
+        let totalWasteCount = 0;
+        let totalDetections = 0;
+        let hasDirtyImage = false;
+
+        for (const image of images) {
+          const decision = await analyzeWasteImage(image);
+          totalWasteCount += decision.wasteCount;
+          totalDetections += decision.count;
+          if (decision.status === "DIRTY") {
+            hasDirtyImage = true;
+          }
+        }
+
+        setAnalysisStatus(hasDirtyImage ? "DIRTY" : "CLEAN");
+
+        if (!hasDirtyImage) {
+          const cleanMessage = "No waste detected. Report not saved.";
+          setAnalysisMessage(cleanMessage);
+          Alert.alert("No Waste Detected", cleanMessage);
+          return;
+        }
+
+        setAnalysisMessage(
+          `Waste detected (${totalWasteCount}/${totalDetections}). Proceeding to save report.`,
+        );
+      }
+
       const { data: report } = await api.post("/reports", {
         title: title.trim(),
         description: description.trim(),
@@ -127,7 +231,9 @@ export default function ReportScreen() {
       } else {
         Alert.alert(
           "Error",
-          getApiErrorMessage(err, "Failed to submit report"),
+          err instanceof Error
+            ? err.message
+            : getApiErrorMessage(err, "Failed to submit report"),
         );
       }
     } finally {
@@ -239,9 +345,11 @@ export default function ReportScreen() {
                 <Image source={{ uri: img.uri }} style={styles.previewImage} />
                 <TouchableOpacity
                   style={styles.removeBtn}
-                  onPress={() =>
-                    setImages((prev) => prev.filter((_, idx) => idx !== i))
-                  }
+                  onPress={() => {
+                    setImages((prev) => prev.filter((_, idx) => idx !== i));
+                    setAnalysisStatus(null);
+                    setAnalysisMessage("");
+                  }}
                 >
                   <Text style={styles.removeText}>✕</Text>
                 </TouchableOpacity>
@@ -249,6 +357,18 @@ export default function ReportScreen() {
             ))}
           </ScrollView>
         )}
+        {analysisMessage ? (
+          <Text
+            style={[
+              styles.analysisText,
+              analysisStatus === "DIRTY"
+                ? styles.analysisTextDirty
+                : styles.analysisTextClean,
+            ]}
+          >
+            {analysisMessage}
+          </Text>
+        ) : null}
       </View>
 
       {/* Anonymous */}
@@ -354,6 +474,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   removeText: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  analysisText: {
+    marginTop: 10,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  analysisTextDirty: { color: "#166534" },
+  analysisTextClean: { color: "#b45309" },
   checkRow: {
     flexDirection: "row",
     alignItems: "center",

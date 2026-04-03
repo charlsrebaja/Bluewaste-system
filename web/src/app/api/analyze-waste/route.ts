@@ -6,6 +6,8 @@ export const runtime = "nodejs";
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 
+type DecisionStatus = "DIRTY" | "CLEAN";
+
 function toNumberOrUndefined(
   value: FormDataEntryValue | null,
 ): number | undefined {
@@ -43,6 +45,34 @@ function safeParseJson(text: string) {
   } catch {
     return null;
   }
+}
+
+function toNonNegativeInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.trunc(parsed);
+    }
+  }
+
+  return null;
+}
+
+function normalizeDecisionStatus(value: unknown): DecisionStatus | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "DIRTY" || normalized === "CLEAN") {
+    return normalized;
+  }
+
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -110,69 +140,92 @@ export async function POST(request: NextRequest) {
       return toJsonError(
         502,
         `YOLO API request failed: ${yoloMessage}`,
-        "Check if the Railway service is running and CORS is configured.",
+        "Check if the YOLO service is reachable and CORS is configured.",
       );
     }
 
     const classification = classifyYoloPayload(yoloJson);
+    const rawCount =
+      toNonNegativeInt((yoloJson as any)?.count) ??
+      classification.detections.length;
+    const wasteCount =
+      toNonNegativeInt((yoloJson as any)?.waste_count) ??
+      classification.detections.length;
+    const status: DecisionStatus =
+      normalizeDecisionStatus((yoloJson as any)?.status) ??
+      (wasteCount > 0 ? "DIRTY" : "CLEAN");
 
-    const uploadBody = new FormData();
-    uploadBody.append(
-      "image",
-      new Blob([imageBuffer], { type: image.type }),
-      image.name,
-    );
+    const saveIfDirtyEntry = formData.get("saveIfDirty");
+    const saveIfDirty =
+      typeof saveIfDirtyEntry === "string" &&
+      saveIfDirtyEntry.trim().toLowerCase() === "true";
 
-    const uploadResponse = await fetch(`${apiBaseUrl}/upload`, {
-      method: "POST",
-      headers: { Authorization: authorization },
-      body: uploadBody,
-    });
+    let uploadedImageUrl: string | null = null;
+    let savedReport: unknown = null;
 
-    if (!uploadResponse.ok) {
-      return toJsonError(502, "Failed to upload image");
+    if (saveIfDirty && status === "DIRTY") {
+      const uploadBody = new FormData();
+      uploadBody.append(
+        "image",
+        new Blob([imageBuffer], { type: image.type }),
+        image.name,
+      );
+
+      const uploadResponse = await fetch(`${apiBaseUrl}/upload`, {
+        method: "POST",
+        headers: { Authorization: authorization },
+        body: uploadBody,
+      });
+
+      if (!uploadResponse.ok) {
+        return toJsonError(502, "Failed to upload image");
+      }
+
+      const uploadedImage = await uploadResponse.json();
+      uploadedImageUrl = uploadedImage.url;
+
+      const latitude = toNumberOrUndefined(formData.get("latitude"));
+      const longitude = toNumberOrUndefined(formData.get("longitude"));
+      const addressValue = formData.get("address");
+      const address =
+        typeof addressValue === "string" && addressValue.trim().length > 0
+          ? addressValue.trim()
+          : undefined;
+
+      const saveResponse = await fetch(`${apiBaseUrl}/waste-reports`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: authorization,
+        },
+        body: JSON.stringify({
+          imageUrl: uploadedImage.url,
+          detectedObject: classification.detectedObject,
+          wasteType: classification.wasteTypeCode,
+          confidence: classification.confidence,
+          labels: classification.labels,
+          latitude,
+          longitude,
+          address,
+        }),
+      });
+
+      if (!saveResponse.ok) {
+        return toJsonError(502, "Failed to save waste report");
+      }
+
+      savedReport = await saveResponse.json();
     }
-
-    const uploadedImage = await uploadResponse.json();
-
-    const latitude = toNumberOrUndefined(formData.get("latitude"));
-    const longitude = toNumberOrUndefined(formData.get("longitude"));
-    const addressValue = formData.get("address");
-    const address =
-      typeof addressValue === "string" && addressValue.trim().length > 0
-        ? addressValue.trim()
-        : undefined;
-
-    const saveResponse = await fetch(`${apiBaseUrl}/waste-reports`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authorization,
-      },
-      body: JSON.stringify({
-        imageUrl: uploadedImage.url,
-        detectedObject: classification.detectedObject,
-        wasteType: classification.wasteTypeCode,
-        confidence: classification.confidence,
-        labels: classification.labels,
-        latitude,
-        longitude,
-        address,
-      }),
-    });
-
-    if (!saveResponse.ok) {
-      return toJsonError(502, "Failed to save waste report");
-    }
-
-    const savedReport = await saveResponse.json();
 
     return NextResponse.json({
       detectedObject: classification.detectedObject,
       wasteType: classification.wasteType,
       wasteTypeCode: classification.wasteTypeCode,
       confidence: classification.confidence,
-      imageUrl: uploadedImage.url,
+      status,
+      waste_count: wasteCount,
+      count: rawCount,
+      imageUrl: uploadedImageUrl,
       labels: classification.labels,
       detections: classification.detections,
       report: savedReport,
