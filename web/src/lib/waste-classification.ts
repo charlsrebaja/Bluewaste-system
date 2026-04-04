@@ -8,6 +8,10 @@ export interface DetectionBox {
   width: number;
   height: number;
   normalized: boolean;
+  isWaste?: boolean;
+  material?: string;
+  wasteCategory?: string;
+  shapeHint?: string;
 }
 
 export interface ClassificationResult {
@@ -43,6 +47,24 @@ const ORGANIC_KEYWORDS = [
   "organic",
   "garden waste",
 ];
+
+const WASTE_CLASS_KEYWORDS = [
+  "bottle",
+  "cup",
+  "glass",
+  "can",
+  "paper",
+  "cardboard",
+  "carton",
+  "book",
+  "banana",
+  "apple",
+  "orange",
+  "broccoli",
+  "carrot",
+];
+
+const MIN_WASTE_CONFIDENCE = 0.3;
 
 const HUMAN_LABELS: Record<WasteTypeCode, ClassificationResult["wasteType"]> = {
   RECYCLABLE: "Recyclable",
@@ -216,6 +238,28 @@ function parseDetection(entry: any): DetectionBox | null {
   const normalized =
     box.x <= 1 && box.y <= 1 && box.width <= 1 && box.height <= 1;
 
+  const explicitIsWaste =
+    typeof entry?.is_waste === "boolean"
+      ? entry.is_waste
+      : typeof entry?.isWaste === "boolean"
+        ? entry.isWaste
+        : undefined;
+
+  const material =
+    typeof entry?.material === "string" ? toLabel(entry.material) : undefined;
+  const wasteCategory =
+    typeof entry?.waste_category === "string"
+      ? toLabel(entry.waste_category)
+      : typeof entry?.wasteCategory === "string"
+        ? toLabel(entry.wasteCategory)
+        : undefined;
+  const shapeHint =
+    typeof entry?.shape_hint === "string"
+      ? toLabel(entry.shape_hint)
+      : typeof entry?.shapeHint === "string"
+        ? toLabel(entry.shapeHint)
+        : undefined;
+
   return {
     className,
     confidence,
@@ -224,10 +268,38 @@ function parseDetection(entry: any): DetectionBox | null {
     width: box.width,
     height: box.height,
     normalized,
+    isWaste: explicitIsWaste,
+    material,
+    wasteCategory,
+    shapeHint,
   };
 }
 
-function inferWasteType(labels: string[]): WasteTypeCode {
+function isWasteLikeLabel(label: string) {
+  return WASTE_CLASS_KEYWORDS.some((keyword) => label.includes(keyword));
+}
+
+function inferWasteType(
+  detections: DetectionBox[],
+  labels: string[],
+): WasteTypeCode {
+  const hasOrganicFromCategory = detections.some(
+    (detection) => detection.wasteCategory === "organic",
+  );
+  if (hasOrganicFromCategory) return "ORGANIC";
+
+  const hasRecyclableFromCategory = detections.some(
+    (detection) => detection.wasteCategory === "recyclable",
+  );
+  if (hasRecyclableFromCategory) return "RECYCLABLE";
+
+  const hasRecyclableFromMaterial = detections.some((detection) =>
+    ["plastic", "glass", "metal", "paper", "cardboard"].includes(
+      detection.material || "",
+    ),
+  );
+  if (hasRecyclableFromMaterial) return "RECYCLABLE";
+
   const hasOrganic = labels.some((label) =>
     labelMatches(label, ORGANIC_KEYWORDS),
   );
@@ -242,34 +314,49 @@ function inferWasteType(labels: string[]): WasteTypeCode {
 }
 
 export function classifyYoloPayload(payload: unknown): ClassificationResult {
-  const detections = pickArray(payload)
+  const allDetections = pickArray(payload)
     .map(parseDetection)
     .filter((item): item is DetectionBox => !!item)
     .sort((a, b) => b.confidence - a.confidence);
 
-  if (detections.length === 0) {
+  const wasteDetections = allDetections.filter((detection) => {
+    const explicitWaste = detection.isWaste === true;
+    const heuristicWaste = isWasteLikeLabel(detection.className);
+    return (
+      (explicitWaste || heuristicWaste) &&
+      detection.confidence >= MIN_WASTE_CONFIDENCE
+    );
+  });
+
+  if (wasteDetections.length === 0) {
+    const unclearImage = Boolean(
+      (payload as any)?.unclear_image ||
+      (payload as any)?.image_quality?.is_unclear,
+    );
     return {
-      detectedObject: "unknown",
+      detectedObject: unclearImage ? "unclear_image" : "no_waste_detected",
       wasteTypeCode: "NON_RECYCLABLE",
       wasteType: HUMAN_LABELS.NON_RECYCLABLE,
-      confidence: 0,
+      confidence: unclearImage ? 0.15 : 0,
       labels: [],
       detections: [],
     };
   }
 
   const labels = Array.from(
-    new Set(detections.map((detection) => detection.className)),
+    new Set(wasteDetections.map((detection) => detection.className)),
   );
-  const top = detections[0];
-  const wasteTypeCode = inferWasteType(labels);
+  const top = wasteDetections[0];
+  const wasteTypeCode = inferWasteType(wasteDetections, labels);
+  const apiOverallConfidence = toNumber((payload as any)?.overall_confidence);
+  const confidence = apiOverallConfidence ?? top.confidence;
 
   return {
     detectedObject: top.className,
     wasteTypeCode,
     wasteType: HUMAN_LABELS[wasteTypeCode],
-    confidence: Number(top.confidence.toFixed(4)),
+    confidence: Number(confidence.toFixed(4)),
     labels,
-    detections,
+    detections: wasteDetections,
   };
 }
