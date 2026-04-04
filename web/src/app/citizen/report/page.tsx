@@ -95,29 +95,34 @@ async function requestAnalyzeWaste(
   formData: FormData,
   token: string,
 ): Promise<any> {
-  const endpoints = ["/api/analyze-waste", "/web/api/analyze-waste"];
+  const endpoints = ["/web/api/analyze-waste", "/api/analyze-waste"];
   let lastErrorMessage = "Failed to analyze image.";
 
   for (const endpoint of endpoints) {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    });
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
 
-    const payload = await response.json().catch(() => ({}));
-    if (response.ok) {
-      return payload;
-    }
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) {
+        return payload;
+      }
 
-    lastErrorMessage =
-      payload?.message || payload?.error || "Failed to analyze image.";
+      lastErrorMessage =
+        payload?.message || payload?.error || "Failed to analyze image.";
 
-    // On this monorepo Vercel deployment, /api may resolve to backend first.
-    if (response.status !== 404) {
-      throw new Error(lastErrorMessage);
+      // On this monorepo Vercel deployment, /api may resolve to backend first.
+      if (response.status !== 404) {
+        throw new Error(lastErrorMessage);
+      }
+    } catch (error) {
+      lastErrorMessage =
+        error instanceof Error ? error.message : "Failed to analyze image.";
     }
   }
 
