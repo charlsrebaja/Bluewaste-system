@@ -1,10 +1,7 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from ultralytics import YOLO
-import numpy as np
-import cv2
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 
 app = FastAPI(title="BlueWaste YOLO API", version="1.0.0")
 
@@ -17,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_model: Optional[YOLO] = None
+_model: Optional[Any] = None
 _model_lock = Lock()
 
 WASTE_CLASSES = {"bottle", "cup"}
@@ -39,11 +36,13 @@ def _to_xywh_normalized(xyxy, width: int, height: int):
     }
 
 
-def _get_model() -> YOLO:
+def _get_model() -> Any:
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
+                from ultralytics import YOLO
+
                 _model = YOLO("yolov8n.pt")
     return _model
 
@@ -55,6 +54,9 @@ async def health():
 
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
+    import cv2
+    import numpy as np
+
     if image.content_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise HTTPException(status_code=400, detail="Unsupported image type")
 
