@@ -91,6 +91,39 @@ function normalizeDecisionStatus(value: unknown): "DIRTY" | "CLEAN" {
   return value.trim().toUpperCase() === "DIRTY" ? "DIRTY" : "CLEAN";
 }
 
+async function requestAnalyzeWaste(
+  formData: FormData,
+  token: string,
+): Promise<any> {
+  const endpoints = ["/api/analyze-waste", "/web/api/analyze-waste"];
+  let lastErrorMessage = "Failed to analyze image.";
+
+  for (const endpoint of endpoints) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) {
+      return payload;
+    }
+
+    lastErrorMessage =
+      payload?.message || payload?.error || "Failed to analyze image.";
+
+    // On this monorepo Vercel deployment, /api may resolve to backend first.
+    if (response.status !== 404) {
+      throw new Error(lastErrorMessage);
+    }
+  }
+
+  throw new Error(lastErrorMessage);
+}
+
 export default function SubmitReportPage() {
   const router = useRouter();
   const { token } = useAuth();
@@ -237,20 +270,7 @@ export default function SubmitReportPage() {
       formData.append("longitude", String(location.lng));
     }
 
-    const response = await fetch("/api/analyze-waste", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(
-        payload?.message || payload?.error || "Failed to analyze image.",
-      );
-    }
+    const payload = await requestAnalyzeWaste(formData, token);
 
     const status = normalizeDecisionStatus(payload?.status);
     const wasteCount = toNonNegativeInt(payload?.waste_count);
