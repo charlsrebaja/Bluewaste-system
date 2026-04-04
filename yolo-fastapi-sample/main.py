@@ -54,55 +54,60 @@ async def health():
 
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
-    import cv2
-    import numpy as np
+    try:
+        import cv2
+        import numpy as np
 
-    if image.content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(status_code=400, detail="Unsupported image type")
+        if image.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(status_code=400, detail="Unsupported image type")
 
-    data = await image.read()
-    np_arr = np.frombuffer(data, np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        data = await image.read()
+        np_arr = np.frombuffer(data, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-    if frame is None:
-        raise HTTPException(status_code=400, detail="Invalid image")
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image")
 
-    height, width = frame.shape[:2]
-    model = _get_model()
-    results = model.predict(source=frame, conf=0.25, verbose=False)
+        height, width = frame.shape[:2]
+        model = _get_model()
+        results = model.predict(source=frame, conf=0.25, verbose=False)
 
-    detections = []
-    waste_count = 0
-    if len(results) > 0:
-        r = results[0]
-        names = r.names
-        for box in r.boxes:
-            cls_idx = int(box.cls.item())
-            class_name = names.get(cls_idx, str(cls_idx))
-            confidence = float(box.conf.item())
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            bbox = _to_xywh_normalized((x1, y1, x2, y2), width, height)
-            normalized_class_name = str(class_name).lower()
-            is_waste = (
-                normalized_class_name in WASTE_CLASSES
-                and confidence > WASTE_CONFIDENCE_THRESHOLD
-            )
-            if is_waste:
-                waste_count += 1
-            detections.append(
-                {
-                    "class": class_name,
-                    "confidence": confidence,
-                    "bbox": bbox,
-                    "is_waste": is_waste,
-                }
-            )
+        detections = []
+        waste_count = 0
+        if len(results) > 0:
+            r = results[0]
+            names = r.names
+            for box in r.boxes:
+                cls_idx = int(box.cls.item())
+                class_name = names.get(cls_idx, str(cls_idx))
+                confidence = float(box.conf.item())
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                bbox = _to_xywh_normalized((x1, y1, x2, y2), width, height)
+                normalized_class_name = str(class_name).lower()
+                is_waste = (
+                    normalized_class_name in WASTE_CLASSES
+                    and confidence > WASTE_CONFIDENCE_THRESHOLD
+                )
+                if is_waste:
+                    waste_count += 1
+                detections.append(
+                    {
+                        "class": class_name,
+                        "confidence": confidence,
+                        "bbox": bbox,
+                        "is_waste": is_waste,
+                    }
+                )
 
-    status = "DIRTY" if waste_count >= DIRTY_MIN_WASTE_COUNT else "CLEAN"
+        status = "DIRTY" if waste_count >= DIRTY_MIN_WASTE_COUNT else "CLEAN"
 
-    return {
-        "detections": detections,
-        "count": len(detections),
-        "waste_count": waste_count,
-        "status": status,
-    }
+        return {
+            "detections": detections,
+            "count": len(detections),
+            "waste_count": waste_count,
+            "status": status,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}")
