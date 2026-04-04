@@ -17,72 +17,30 @@ app.add_middleware(
 _model: Optional[Any] = None
 _model_lock = Lock()
 
-WASTE_CLASS_PROFILES = {
-    "bottle": {
-        "material": "plastic",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "cylindrical",
-    },
-    "cup": {
-        "material": "plastic",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "open_top",
-    },
-    "wine glass": {
-        "material": "glass",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "stemmed",
-    },
-    "can": {
-        "material": "metal",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "cylindrical",
-    },
-    "paper": {
-        "material": "paper",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "flat",
-    },
-    "cardboard": {
-        "material": "paper",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "box_like",
-    },
-    "book": {
-        "material": "paper",
-        "waste_category": "RECYCLABLE",
-        "shape_hint": "rectangular",
-    },
-    "banana": {
-        "material": "organic",
-        "waste_category": "ORGANIC",
-        "shape_hint": "curved",
-    },
-    "apple": {
-        "material": "organic",
-        "waste_category": "ORGANIC",
-        "shape_hint": "round",
-    },
-    "orange": {
-        "material": "organic",
-        "waste_category": "ORGANIC",
-        "shape_hint": "round",
-    },
-    "broccoli": {
-        "material": "organic",
-        "waste_category": "ORGANIC",
-        "shape_hint": "clustered",
-    },
-    "carrot": {
-        "material": "organic",
-        "waste_category": "ORGANIC",
-        "shape_hint": "elongated",
-    },
-}
-WASTE_CLASSES = set(WASTE_CLASS_PROFILES.keys())
-WASTE_CONFIDENCE_THRESHOLD = 0.35
+# Restrict inference to known waste-relevant COCO classes to avoid noisy labels
+# like "teddy bear" on cluttered scenes.
+WASTE_CLASSES = {"bottle", "cup", "wine glass"}
+WASTE_CONFIDENCE_THRESHOLD = 0.2
 # Set to 2 for stricter DIRTY classification.
 DIRTY_MIN_WASTE_COUNT = 1
+
+
+def _normalize_label(value: Any) -> str:
+    return str(value).strip().lower()
+
+
+def _get_waste_class_ids(model: Any) -> list[int]:
+    names = model.names
+    if isinstance(names, list):
+        label_map = {idx: label for idx, label in enumerate(names)}
+    else:
+        label_map = names
+
+    return [
+        int(class_idx)
+        for class_idx, class_name in label_map.items()
+        if _normalize_label(class_name) in WASTE_CLASSES
+    ]
 
 
 def _to_xywh_normalized(xyxy, width: int, height: int):
@@ -95,40 +53,6 @@ def _to_xywh_normalized(xyxy, width: int, height: int):
         "width": float(box_width / width),
         "height": float(box_height / height),
         "normalized": True,
-    }
-
-
-def _enhance_frame(frame):
-    import cv2
-
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_channel = clahe.apply(l_channel)
-    enhanced_lab = cv2.merge((l_channel, a_channel, b_channel))
-    enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
-    return cv2.bilateralFilter(enhanced_bgr, 5, 40, 40)
-
-
-def _analyze_image_quality(frame):
-    import cv2
-    import numpy as np
-
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    brightness = float(np.mean(gray))
-
-    blur_score = min(1.0, blur_var / 180.0)
-    exposure_score = max(0.0, 1.0 - (abs(brightness - 128.0) / 128.0))
-    quality_score = round((0.65 * blur_score) + (0.35 * exposure_score), 4)
-
-    is_unclear = blur_var < 85.0 or brightness < 35.0 or brightness > 235.0
-
-    return {
-        "blur_variance": round(blur_var, 2),
-        "brightness": round(brightness, 2),
-        "quality_score": quality_score,
-        "is_unclear": bool(is_unclear),
     }
 
 
@@ -164,65 +88,46 @@ async def predict(image: UploadFile = File(...)):
         if frame is None:
             raise HTTPException(status_code=400, detail="Invalid image")
 
-        quality = _analyze_image_quality(frame)
-        enhanced_frame = _enhance_frame(frame)
-
         height, width = frame.shape[:2]
         model = _get_model()
-        results = model.predict(source=enhanced_frame, conf=0.2, verbose=False)
+        waste_class_ids = _get_waste_class_ids(model)
+        if not waste_class_ids:
+            raise HTTPException(status_code=500, detail="No waste classes configured")
+
+        results = model.predict(
+            source=frame,
+            conf=WASTE_CONFIDENCE_THRESHOLD,
+            classes=waste_class_ids,
+            verbose=False,
+        )
 
         detections = []
-        waste_count = 0
-        confidence_penalty = 0.12 if quality["is_unclear"] else 0.0
         if len(results) > 0:
             r = results[0]
             names = r.names
             for box in r.boxes:
                 cls_idx = int(box.cls.item())
                 class_name = names.get(cls_idx, str(cls_idx))
-                confidence_raw = float(box.conf.item())
-                confidence = max(0.0, confidence_raw - confidence_penalty)
+                confidence = float(box.conf.item())
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 bbox = _to_xywh_normalized((x1, y1, x2, y2), width, height)
-                normalized_class_name = str(class_name).lower()
-                profile = WASTE_CLASS_PROFILES.get(normalized_class_name)
-                is_waste = (
-                    normalized_class_name in WASTE_CLASSES
-                    and confidence > WASTE_CONFIDENCE_THRESHOLD
-                )
-                if is_waste:
-                    waste_count += 1
                 detections.append(
                     {
-                        "label": class_name,
                         "class": class_name,
-                        "confidence": round(confidence, 4),
-                        "confidence_raw": round(confidence_raw, 4),
+                        "confidence": confidence,
                         "bbox": bbox,
-                        "is_waste": is_waste,
-                        "material": profile["material"] if profile else None,
-                        "waste_category": profile["waste_category"] if profile else None,
-                        "shape_hint": profile["shape_hint"] if profile else None,
+                        "is_waste": True,
                     }
                 )
 
+        waste_count = len(detections)
         status = "DIRTY" if waste_count >= DIRTY_MIN_WASTE_COUNT else "CLEAN"
-        if waste_count > 0:
-            overall_confidence = max(
-                [d["confidence"] for d in detections if d["is_waste"]],
-                default=0.0,
-            )
-        else:
-            overall_confidence = 0.15 if quality["is_unclear"] else 0.0
 
         return {
             "detections": detections,
             "count": len(detections),
             "waste_count": waste_count,
             "status": status,
-            "overall_confidence": round(overall_confidence, 4),
-            "image_quality": quality,
-            "unclear_image": quality["is_unclear"],
         }
     except HTTPException:
         raise
